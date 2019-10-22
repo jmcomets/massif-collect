@@ -4,7 +4,9 @@ use std::str::FromStr;
 use nom::character::streaming::{space0, space1, digit1, hex_digit1, not_line_ending};
 use nom::number::streaming::float;
 
-pub(crate) fn massif_tree<R: BufRead>(reader: R) -> Iter<R> {
+use crate::{Call, Allocation, Location};
+
+pub fn massif_tree<R: BufRead>(reader: R) -> Iter<R> {
     Iter {
         reader,
         lineno: 0,
@@ -13,7 +15,7 @@ pub(crate) fn massif_tree<R: BufRead>(reader: R) -> Iter<R> {
     }
 }
 
-pub(crate) struct Iter<R> {
+pub struct Iter<R> {
     reader: R,
     lineno: usize,
     line: String,
@@ -63,10 +65,9 @@ impl<R: BufRead> Iterator for Iter<R> {
         let callee = callee.map(|(c, _)| c.clone());
 
         // TODO group these calls under one match over the parsed line's symbol
-        let call = Call::from_symbol(&parsed_line.symbol);
-        let details = AllocationDetails::from_symbol(&parsed_line.symbol);
+        let (call, location) = parsed_line.symbol.into();
 
-        let allocation = Allocation::new(parsed_line.bytes, details);
+        let allocation = Allocation::new(parsed_line.bytes, location);
 
         self.calls.push((call.clone(), parsed_line.nb_callers));
         self.line.clear();
@@ -75,70 +76,8 @@ impl<R: BufRead> Iterator for Iter<R> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Call {
-    Inner(String),
-    Leaf,
-    Root,
-}
-
-impl Call {
-    fn from_symbol(symbol: &Symbol) -> Self {
-        match symbol {
-            Internal((address, _)) => Call::Inner(address.to_string()),
-            External(_)            => Call::Leaf,
-            Ignored(_)             => Call::Root,
-        }
-    }
-
-    #[cfg(debug_assertions)]
-    pub fn is_leaf(&self) -> bool {
-        if let Call::Leaf = self { true } else { false }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) struct Allocation {
-    pub bytes: usize,
-    pub details: AllocationDetails,
-}
-
-impl Allocation {
-    fn new(bytes: usize, details: AllocationDetails) -> Self {
-        Allocation { bytes, details }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) enum AllocationDetails {
-    Described(String),
-    Omitted((usize, f32)),
-}
-use AllocationDetails::*;
-
-impl AllocationDetails {
-    fn from_symbol(symbol: &Symbol) -> Self {
-        match symbol {
-            External(description) | Internal((_, description)) => Described(description.to_string()),
-            Ignored((count, threshold))                        => Omitted((*count, *threshold)),
-        }
-    }
-}
-
-impl ToString for AllocationDetails {
-    fn to_string(&self) -> String {
-        match self {
-            Described(description)      => description.clone(),
-            Omitted((count, threshold)) => {
-                let plural = if count > &1 { "s" } else { "" };
-                format!("in {} place{}, below massif's threshold ({:.2}%)", count, plural, threshold)
-            }
-        }
-    }
-}
-
 #[derive(Debug)]
-pub(crate) struct MassifLine<'a> {
+pub struct MassifLine<'a> {
     pub nb_callers: usize,
     pub bytes: usize,
     pub symbol: Symbol<'a>,
@@ -169,12 +108,31 @@ named!(bytes<&str, usize>,
                 usize::from_str));
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum Symbol<'a> {
+pub enum Symbol<'a> {
     External(&'a str),
     Internal((&'a str, &'a str)),
     Ignored((usize, f32)),
 }
-use Symbol::*;
+
+impl<'a> Into<(Call, Location)> for Symbol<'a> {
+    fn into(self) -> (Call, Location) {
+        use Symbol::*;
+
+        let call = match self {
+            Internal((address, _)) => Call::Inner(address.to_string()),
+            External(_)            => Call::Leaf,
+            Ignored(_)             => Call::Root,
+        };
+
+        use Location::*;
+        let location = match self {
+            External(description) | Internal((_, description)) => Described(description.to_string()),
+            Ignored((count, threshold))                        => Omitted((count, threshold)),
+        };
+
+        (call, location)
+    }
+}
 
 named!(symbol<&str, Symbol>,
        preceded!(space0,
@@ -230,6 +188,7 @@ mod tests {
 
     #[test]
     fn it_parses_symbols() {
+        use Symbol::*;
         assert_eq!(symbol("(heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n"), Ok(("\n", External("(heap allocation functions) malloc/new/new[], --alloc-fns, etc."))));
         assert_eq!(symbol("0x4E23FC67: std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)\n"), Ok(("\n", Internal(("4E23FC67", "std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)")))));
         assert_eq!(symbol("in 1 place, below massif's threshold (0.01%)"), Ok(("", Ignored((1, 0.01)))));
@@ -240,6 +199,7 @@ mod tests {
 
     #[test]
     fn it_parses_lines() {
+        use Symbol::*;
         assert_eq!(massif_line_tuple("n184: 94985897 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n").map(|(_, o)| o),
                    Ok((184, 94985897, External("(heap allocation functions) malloc/new/new[], --alloc-fns, etc."))));
         assert_eq!(massif_line_tuple("n4: 13847645 0x4E23FC67: std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)\n").map(|(_, o)| o),
@@ -260,6 +220,7 @@ mod tests {
         n0: 42 in 5 places, below massif's threshold (0.01%)
          "#.trim_start().trim_end_matches(' ');
 
+        use Location::*;
         let root1 = Allocation::new(11592561, Described("char* std::string::_S_construct<char const*>(char const*, char const*, std::allocator<char> const&, std::forward_iterator_tag) (in liblog4cxx.so)".to_string()));
         let child1 = Allocation::new(11592452, Described("std::basic_string<char, std::char_traits<char>, std::allocator<char> >::basic_string(char const*, std::allocator<char> const&) (in libstdc++.so)".to_string()));
         let child2 = Allocation::new(109, Omitted((1, 0.01)));

@@ -1,51 +1,51 @@
 use std::collections::HashMap;
 
+use crate::Call;
+
 pub type CallId = usize;
-pub type Address = String; // TODO optimize storage of strings
+
+type Address = String; // TODO optimize storage of strings
 
 #[derive(Debug)]
-pub(crate) struct AddressIndex {
+pub struct CallIndex {
     max_call_id: CallId,
     call_ids: HashMap<Address, CallId>,
-    call_addresses: Vec<Option<Address>>,
 }
 
-impl AddressIndex {
+impl CallIndex {
     pub fn new() -> Self {
-        AddressIndex {
+        CallIndex {
             max_call_id: 0,
             call_ids: HashMap::new(),
-            call_addresses: Vec::new(),
         }
     }
 
-    pub fn index(&mut self, address: Address) -> CallId {
-        let ref mut max_call_id = self.max_call_id;
-        let ref mut call_addresses = self.call_addresses;
+    pub fn index(&mut self, call: Call) -> CallId {
+        let address = match call {
+            Call::Inner(address) => address,
+            Call::Root           => "ROOT".to_string(),
+            Call::Leaf           => "LEAF".to_string(),
+        };
 
-        let call_id = *self.call_ids.entry(address.clone())
+        self.get_or_insert_address(address)
+    }
+
+    pub fn index_leaf_caller(&mut self) -> CallId {
+        self.get_or_insert_address("SYSTEM".to_string())
+    }
+
+    fn get_or_insert_address(&mut self, address: Address) -> CallId {
+        let ref mut max_call_id = self.max_call_id;
+
+        let call_id = *self.call_ids.entry(address)
             .or_insert_with(|| {
                 let call_id = *max_call_id;
 
                 *max_call_id += 1;
 
-                while call_id >= call_addresses.len() {
-                    call_addresses.push(None);
-                }
-
                 call_id
             });
 
-        self.call_addresses[call_id] = Some(address);
-
         call_id
-    }
-
-    pub fn address(&self, call_id: CallId) -> &str {
-        self.call_addresses[call_id].as_ref().unwrap()
-    }
-
-    pub fn make_storage<T: Clone>(&self, default: T) -> Vec<T> {
-        vec![default; self.max_call_id]
     }
 }

@@ -2,48 +2,24 @@ use std::env;
 use std::fs::File;
 use std::io::{self, BufReader};
 
-#[macro_use]
-extern crate nom;
-
 use petgraph::prelude::*;
 use petgraph::visit::{depth_first_search, DfsEvent, Control};
 
-mod indexing;
-mod parsing;
-
-use indexing::{AddressIndex, CallId};
-use parsing::{Allocation, Call};
-
-type CallGraph = DiGraphMap<CallId, Allocation>;
+use massif_collect::{read_massif, CallGraph};
 
 fn main() -> io::Result<()> {
-    let mut address_index = AddressIndex::new();
-    let mut call_graph = CallGraph::new();
-
     let filename = env::args().nth(1).unwrap_or("data/example.out".to_string());
     let file = File::open(filename)?;
     let reader = BufReader::new(file);
 
-    for entry in parsing::massif_tree(reader) {
-        let (caller, callee, allocation) = entry?;
+    let call_graph = read_massif(reader)?;
 
-        fn call_address(call: Call) -> String {
-            match call {
-                Call::Inner(address) => address,
-                Call::Root           => "ROOT".to_string(),
-                Call::Leaf           => "LEAF".to_string(),
-            }
-        }
+    debug_call_graph(&call_graph);
 
-        // leaf calls should always allocate through the system
-        debug_assert!(!caller.is_leaf() || callee.is_none(), "{:?} -> {:?} : {:?}", caller, callee, allocation);
+    Ok(())
+}
 
-        let caller_id = address_index.index(call_address(caller));
-        let callee_id = address_index.index(callee.map(call_address).unwrap_or("SYSTEM".to_string()));
-
-        call_graph.add_edge(caller_id, callee_id, allocation);
-    }
-
+fn debug_call_graph(call_graph: &CallGraph) {
     // FIXME the allocations of the callers should sum up to the allocation of the callee
     #[cfg(debug_assertions)] {
         for callee1_id in call_graph.nodes() {
@@ -73,19 +49,18 @@ fn main() -> io::Result<()> {
         }
     }
 
-    let mut call_depths = address_index.make_storage(0);
-
     for root_call_id in call_graph.nodes() {
         // only consider roots
         if call_graph.neighbors_directed(root_call_id, Incoming).next().is_some() {
             continue;
         }
 
-        // TODO DFS on the root to sum all leaf allocations
-
+        let mut depth = 0;
         depth_first_search(&call_graph, Some(root_call_id), |event| {
             use DfsEvent::*;
             match event {
+                Discover(_, _) => { depth += 1; }
+                Finish(_, _)   => { depth -= 1; }
                 TreeEdge(caller_id, callee_id) | BackEdge(caller_id, callee_id) | CrossForwardEdge(caller_id, callee_id) => {
                     let allocation = call_graph.edge_weight(caller_id, callee_id).unwrap();
                     let bytes = allocation.bytes;
@@ -100,9 +75,6 @@ fn main() -> io::Result<()> {
                     let call_ratio = 100. * (bytes as f64) / (total_call_bytes as f64);
                     // let root_ratio = 100. * (bytes as f64) / (total_root_bytes as f64);
 
-                    let depth = call_depths[caller_id];
-                    let address = address_index.address(callee_id);
-
                     for _ in 0..depth { print!(" "); }
                     print!("{}", bytes);
                     // print!(" (");
@@ -114,18 +86,12 @@ fn main() -> io::Result<()> {
                     }
                     // print!("{:.2}% of {} [total]", root_ratio, total_root_bytes);
                     // print!(")");
-                    print!(": {} {}", address, allocation.details.to_string());
+                    print!(": {}", allocation.location.to_string());
                     println!();
-
-                    call_depths[callee_id] = depth + 1;
                 }
-
-                _ => {}
             }
 
             Control::<()>::Continue
         });
     }
-
-    Ok(())
 }
