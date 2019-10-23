@@ -91,15 +91,17 @@ impl CallList {
     }
 }
 
+type CallId = usize;
+
 struct CallStack {
-    caller_id: usize,
-    callee_id: usize,
+    caller_id: CallId,
+    callee_id: CallId,
     description: String,
     allocated_bytes: usize,
 }
 
 impl CallStack {
-    fn new(caller_id: usize, callee_id: usize, allocation: &Allocation) -> Self {
+    fn new(caller_id: CallId, callee_id: CallId, allocation: &Allocation) -> Self {
         CallStack {
             caller_id, callee_id,
             description: format!("{}: {}", allocation.bytes, allocation.location.to_string()),
@@ -116,35 +118,41 @@ impl AsRef<str> for CallStack {
 
 struct App<'a> {
     call_graph: &'a CallGraph,
+    callers: CallList,
+    callees: CallList,
     callees_selected: bool,
-    call_lists: Vec<CallList>,
+    history: Vec<CallId>,
 }
 
 impl<'a> App<'a> {
     fn new(call_graph: &'a CallGraph) -> Self {
-        let root_stacks: Vec<_> = call_graph.nodes()
-            .filter(|&node| call_graph.neighbors_directed(node, Incoming).next().is_none())
-            .flat_map(|node| call_graph.edges(node))
-            .map(|(caller_id, callee_id, allocation)| CallStack::new(caller_id, callee_id, allocation))
-            .collect();
-
-        App {
+        let mut app = App {
             call_graph,
             callees_selected: true,
-            call_lists: vec![CallList::new(vec![]), CallList::new(root_stacks)],
-        }
+            callers: CallList::new(vec![]),
+            callees: CallList::new(vec![]),
+            history: vec![],
+        };
+
+        app.navigate_to_root();
+
+        app
     }
 
     fn selection(&self) -> &CallList {
-        let mut i = self.call_lists.len()-2;
-        if self.callees_selected { i += 1; }
-        &self.call_lists[i]
+        if self.callees_selected {
+            &self.callees
+        } else {
+            &self.callers
+        }
     }
 
     fn selection_mut(&mut self) -> &mut CallList {
-        let mut i = self.call_lists.len()-2;
-        if self.callees_selected { i += 1; }
-        &mut self.call_lists[i]
+        if self.callees_selected {
+            &mut self.callees
+        } else {
+            &mut self.callers
+        }
     }
 
     fn first(&mut self) {
@@ -173,47 +181,53 @@ impl<'a> App<'a> {
 
     fn enter(&mut self) {
         if let Some(stack) = self.selection().selection() {
-            let (call_id, direction) = if self.callees_selected {
-                (stack.callee_id, Outgoing)
-            } else {
-                (stack.caller_id, Incoming)
-            };
-
-            let stacks = self.call_graph.neighbors_directed(call_id, direction)
-                .map(|other_call_id| {
-                    let (caller_id, callee_id) = if direction == Outgoing {
-                        (call_id, other_call_id)
-                    } else {
-                        (other_call_id, call_id)
-                    };
-
-                    let allocation = self.call_graph.edge_weight(caller_id, callee_id).unwrap();
-                    CallStack::new(caller_id, callee_id, allocation)
-                })
-                .collect();
-
-            self.call_lists.push(CallList::new(stacks));
+            let call_id = if self.callees_selected { stack.callee_id } else { stack.caller_id };
+            self.history.push(call_id);
+            self.navigate_to(call_id);
         }
     }
 
     fn leave(&mut self) {
-        if self.call_lists.len() > 2 {
-            self.call_lists.pop();
+        self.history.pop();
+        if let Some(&call_id) = self.history.last() {
+            self.navigate_to(call_id);
+        } else {
+            self.navigate_to_root();
         }
     }
 
-    fn callers(&self) -> (&CallList, bool) {
-        let i = self.call_lists.len()-2;
-        (&self.call_lists[i], !self.callees_selected)
+    fn navigate_to(&mut self, call_id: CallId) {
+        self.callers = CallList::new(self.call_graph.neighbors_directed(call_id, Incoming)
+            .map(|other_call_id| {
+                let (caller_id, callee_id) = (other_call_id, call_id);
+                let allocation = self.call_graph.edge_weight(caller_id, callee_id).unwrap();
+                CallStack::new(caller_id, callee_id, allocation)
+            })
+            .collect());
+
+        self.callees = CallList::new(self.call_graph.neighbors_directed(call_id, Outgoing)
+            .map(|other_call_id| {
+                let (caller_id, callee_id) = (call_id, other_call_id);
+                let allocation = self.call_graph.edge_weight(caller_id, callee_id).unwrap();
+                CallStack::new(caller_id, callee_id, allocation)
+            })
+            .collect());
     }
 
-    fn callees(&self) -> (&CallList, bool) {
-        let i = self.call_lists.len()-1;
-        (&self.call_lists[i], self.callees_selected)
+    fn navigate_to_root(&mut self) {
+        self.callers = CallList::new(vec![]);
+
+        self.callees = CallList::new({
+            self.call_graph.nodes()
+                .filter(|&node| self.call_graph.neighbors_directed(node, Incoming).next().is_none())
+                .flat_map(|node| self.call_graph.edges(node))
+                .map(|(caller_id, callee_id, allocation)| CallStack::new(caller_id, callee_id, allocation))
+                .collect()
+        });
     }
 }
 
-fn call_list_widget<'a>(title: &'a str, (call_list, active): (&'a CallList, bool)) -> SelectableList<'a> {
+fn call_list_widget<'a>(title: &'a str, call_list: &'a CallList, active: bool) -> SelectableList<'a> {
     let default_style = Style::default().fg(Color::White).bg(Color::Black);
 
     let highlight_style = {
@@ -270,8 +284,8 @@ fn main() -> io::Result<()> {
                 )
                 .split(f.size());
 
-            call_list_widget("Callers", app.callers()).render(&mut f, chunks[0]);
-            call_list_widget("Callees", app.callees()).render(&mut f, chunks[1]);
+            call_list_widget("Callers", &app.callers, !app.callees_selected).render(&mut f, chunks[0]);
+            call_list_widget("Callees", &app.callees, app.callees_selected).render(&mut f, chunks[1]);
         })?;
 
         // stdout is buffered, flush it to see the effect immediately when hitting backspace
