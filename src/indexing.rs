@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use crate::Call;
-
-pub type CallId = usize;
+use crate::{CallId, Call};
 
 type Address = String; // TODO optimize storage of strings
 

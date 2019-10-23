@@ -5,10 +5,18 @@ extern crate nom;
 
 use petgraph::graphmap::DiGraphMap;
 
+mod app;
+mod components;
+mod events;
+
 mod parsing;
 mod indexing;
 
-pub type CallGraph = DiGraphMap<indexing::CallId, Allocation>;
+pub type CallId = usize;
+
+pub type CallGraph = DiGraphMap<CallId, Allocation>;
+
+pub use app::navigate_call_graph;
 
 pub fn read_massif<R: BufRead>(reader: R) -> io::Result<CallGraph> {
     let mut call_index = indexing::CallIndex::new();
@@ -21,9 +29,6 @@ pub fn read_massif<R: BufRead>(reader: R) -> io::Result<CallGraph> {
             if let Some(callee) = callee {
                 call_index.index(callee)
             } else {
-                // callers should be leafs when there's no callee
-                debug_assert!(caller.is_leaf(), "non-leaf direct allocation: {:?} {:?}", caller, allocation);
-
                 call_index.index_leaf_caller()
             }
         };
@@ -41,13 +46,6 @@ pub enum Call {
     Inner(String),
     Leaf,
     Root,
-}
-
-impl Call {
-    #[cfg(debug_assertions)]
-    pub fn is_leaf(&self) -> bool {
-        if let Call::Leaf = self { true } else { false }
-    }
 }
 
 #[derive(Debug, PartialEq)]
