@@ -64,15 +64,14 @@ impl<R: BufRead> Iterator for Iter<R> {
 
         let callee = callee.map(|(c, _)| c.clone());
 
-        // TODO group these calls under one match over the parsed line's symbol
-        let (call, location) = parsed_line.symbol.into();
+        let (caller, location) = parsed_line.symbol.into();
 
         let allocation = Allocation::new(parsed_line.bytes, location);
 
-        self.calls.push((call.clone(), parsed_line.nb_callers));
+        self.calls.push((caller.clone(), parsed_line.nb_callers));
         self.line.clear();
 
-        Some(Ok((call, callee, allocation)))
+        Some(Ok((caller, callee, allocation)))
     }
 }
 
