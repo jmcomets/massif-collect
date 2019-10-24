@@ -10,5 +10,7 @@ fn main() -> io::Result<()> {
     let reader = BufReader::new(file);
     let call_graph = read_massif(reader)?;
 
-    navigate_call_graph(&call_graph)
+    navigate_call_graph(&call_graph)?;
+
+    Ok(())
 }
