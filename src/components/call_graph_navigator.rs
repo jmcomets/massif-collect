@@ -1,9 +1,12 @@
+use std::collections::HashSet;
+
 use petgraph::prelude::*;
 
 use crate::{
     Allocation,
     CallGraph,
     CallId,
+    Location,
     components::NavigableSelection,
 };
 
@@ -107,15 +110,15 @@ impl<'a> CallGraphNavigator<'a> {
         self.callers = new_call_list(self.call_graph.neighbors_directed(call_id, Incoming)
             .map(|other_call_id| {
                 let (caller_id, callee_id) = (other_call_id, call_id);
-                let allocation = self.call_graph.edge_weight(caller_id, callee_id).unwrap();
-                CallStack::new(caller_id, callee_id, allocation)
+                let allocations = self.call_graph.edge_weight(caller_id, callee_id).unwrap();
+                CallStack::new(caller_id, callee_id, allocations)
             }));
 
         self.callees = new_call_list(self.call_graph.neighbors_directed(call_id, Outgoing)
             .map(|other_call_id| {
                 let (caller_id, callee_id) = (call_id, other_call_id);
-                let allocation = self.call_graph.edge_weight(caller_id, callee_id).unwrap();
-                CallStack::new(caller_id, callee_id, allocation)
+                let allocations = self.call_graph.edge_weight(caller_id, callee_id).unwrap();
+                CallStack::new(caller_id, callee_id, allocations)
             }));
     }
 
@@ -125,7 +128,7 @@ impl<'a> CallGraphNavigator<'a> {
         let callees = self.call_graph.nodes()
             .filter(|&node| self.call_graph.neighbors_directed(node, Incoming).next().is_none())
             .flat_map(|node| self.call_graph.edges(node))
-            .map(|(caller_id, callee_id, allocation)| CallStack::new(caller_id, callee_id, allocation));
+            .map(|(caller_id, callee_id, allocations)| CallStack::new(caller_id, callee_id, allocations));
         self.callees = new_call_list(callees);
     }
 }
@@ -147,12 +150,55 @@ pub struct CallStack {
 }
 
 impl CallStack {
-    fn new(caller_id: CallId, callee_id: CallId, allocation: &Allocation) -> Self {
+    fn new(caller_id: CallId, callee_id: CallId, allocations: &[Allocation]) -> Self {
+        let location = merge_locations(allocations.iter().map(|alloc| &alloc.location)).unwrap();
+        let bytes = allocations.iter().map(|alloc| alloc.bytes).sum();
         CallStack {
             caller_id, callee_id,
-            description: format!("{} bytes {}", allocation.bytes, allocation.location.to_string()),
-            allocated_bytes: allocation.bytes,
+            description: format!("{} bytes {}", bytes, location.to_string()),
+            allocated_bytes: bytes,
         }
+    }
+}
+
+fn merge_locations<'a, T: IntoIterator<Item=&'a Location>>(iter: T) -> Option<Location> {
+    let mut described = HashSet::new();
+    let mut omitted = None;
+    for location in iter {
+        match location {
+            Location::Described(description) => {
+                described.insert(description);
+            }
+
+            Location::Omitted((count, threshold)) => {
+                let (existing_count, existing_threshold) = omitted.get_or_insert((0, threshold));
+                *existing_count += count;
+                if threshold != *existing_threshold {
+                    return None; // TODO throw error
+                }
+            }
+        }
+    }
+
+    if !described.is_empty() && omitted.is_some() {
+        return None; // TODO throw error
+    }
+
+    if described.is_empty() && omitted.is_none() {
+        return None; // TODO throw error
+    }
+
+    if let Some((count, threshold)) = omitted {
+        Some(Location::Omitted((count, *threshold)))
+    } else {
+        let mut merged_description = "".to_string();
+        for description in described {
+            if !merged_description.is_empty() {
+                merged_description += " / ";
+            }
+            merged_description += description;
+        }
+        Some(Location::Described(merged_description))
     }
 }
 

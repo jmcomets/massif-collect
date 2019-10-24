@@ -14,7 +14,7 @@ mod indexing;
 
 pub type CallId = usize;
 
-pub type CallGraph = DiGraphMap<CallId, Allocation>;
+pub type CallGraph = DiGraphMap<CallId, Vec<Allocation>>;
 
 pub use app::navigate_call_graph;
 
@@ -35,7 +35,9 @@ pub fn read_massif<R: BufRead>(reader: R) -> io::Result<CallGraph> {
 
         let caller_id = call_index.index(caller);
 
-        call_graph.add_edge(caller_id, callee_id, allocation);
+        call_graph.edge_entry(caller_id, callee_id)
+            .or_insert(vec![])
+            .push(allocation);
     }
 
     Ok(call_graph)
