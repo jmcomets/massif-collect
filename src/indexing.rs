@@ -28,7 +28,7 @@ impl CallIndex {
         self.get_or_insert_address(address)
     }
 
-    pub fn index_leaf_caller(&mut self) -> CallId {
+    pub fn index_leaf_callee(&mut self) -> CallId {
         self.get_or_insert_address("SYSTEM".to_string())
     }
 

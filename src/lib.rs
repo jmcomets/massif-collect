@@ -29,7 +29,7 @@ pub fn read_massif<R: BufRead>(reader: R) -> io::Result<CallGraph> {
             if let Some(callee) = callee {
                 call_index.index(callee)
             } else {
-                call_index.index_leaf_caller()
+                call_index.index_leaf_callee()
             }
         };
 
