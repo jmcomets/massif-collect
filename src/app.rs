@@ -67,6 +67,8 @@ pub fn navigate_call_graph(call_graph: &CallGraph) -> io::Result<()> {
         // stdout is buffered, flush it to see the effect immediately when hitting backspace
         io::stdout().flush().ok();
 
+        let size = terminal.size().unwrap();
+
         match events.next().map_err(io_error!("handling events"))? {
             Event::Input(input) => match input {
                 Key::Char('q') => { break; }
@@ -75,6 +77,9 @@ pub fn navigate_call_graph(call_graph: &CallGraph) -> io::Result<()> {
                 Key::Up | Key::Char('k')   => { app.select_previous(); }
                 Key::Home                  => { app.select_first(); }
                 Key::End | Key::Char('G')  => { app.select_last(); }
+
+                Key::PageDown | Key::Char('f') => { app.select_nth_next(size.height as usize); }
+                Key::PageUp | Key::Char('b')   => { app.select_nth_previous(size.height as usize); }
 
                 Key::Left | Key::Char('h')  => { app.select_callers(); }
                 Key::Right | Key::Char('l') => { app.select_callees(); }

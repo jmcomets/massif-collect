@@ -1,3 +1,5 @@
+use std::cmp;
+
 pub struct NavigableSelection<T: AsRef<str>> {
     items: Vec<T>,
     selected: Option<usize>,
@@ -22,18 +24,22 @@ impl<T: AsRef<str>> NavigableSelection<T> {
     }
 
     pub fn select_next(&mut self) {
-        if let Some(selected) = self.selected.as_mut() {
-            if *selected+1 < self.items.len() {
-                *selected += 1;
-            }
-        }
+        self.select_nth_next(1)
     }
 
     pub fn select_previous(&mut self) {
-        if let Some(selected) = self.selected.as_mut() {
-            if *selected > 0 {
-                *selected -= 1;
-            }
+        self.select_nth_previous(1)
+    }
+
+    pub fn select_nth_next(&mut self, n: usize) {
+        if let Some(i) = self.selected.as_mut() {
+            *i += cmp::min(self.items.len()-1-*i, n);
+        }
+    }
+
+    pub fn select_nth_previous(&mut self, n: usize) {
+        if let Some(i) = self.selected.as_mut() {
+            *i -= cmp::min(*i, n);
         }
     }
 

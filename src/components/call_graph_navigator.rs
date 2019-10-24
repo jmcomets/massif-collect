@@ -46,6 +46,14 @@ impl<'a> CallGraphNavigator<'a> {
         self.current_mut().select_previous();
     }
 
+    pub fn select_nth_next(&mut self, n: usize) {
+        self.current_mut().select_nth_next(n);
+    }
+
+    pub fn select_nth_previous(&mut self, n: usize) {
+        self.current_mut().select_nth_previous(n);
+    }
+
     pub fn callee_list(&self) -> (&CallList, bool) {
         (&self.callees, self.callees_selected)
     }
