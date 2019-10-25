@@ -64,7 +64,7 @@ impl<R: BufRead> Iterator for Iter<R> {
 
         let callee = callee.map(|(c, _)| c.clone());
 
-        let (caller, location) = parsed_line.symbol.into();
+        let (caller, location) = split_symbol(parsed_line.symbol);
 
         let allocation = Allocation::new(parsed_line.bytes, location);
 
@@ -75,26 +75,51 @@ impl<R: BufRead> Iterator for Iter<R> {
     }
 }
 
-#[derive(Debug)]
-pub struct MassifLine<'a> {
-    pub nb_callers: usize,
-    pub bytes: usize,
-    pub symbol: Symbol<'a>,
+fn split_symbol(symbol: Symbol) -> (Call, Location) {
+    use Symbol::*;
+
+    let call = match symbol {
+        Internal((address, _)) => Call::Inner(address.to_string()),
+        External(_)            => Call::Leaf,
+        Ignored(_)             => Call::Root,
+    };
+
+    use Location::*;
+    let location = match symbol {
+        External(description) | Internal((_, description)) => Described(description.to_string()),
+        Ignored((count, threshold))                        => Omitted((count, threshold)),
+    };
+
+    (call, location)
 }
 
-impl<'a> MassifLine<'a> {
-    fn from_tuple(tuple: MassifLineTuple<'a>) -> Self {
+#[derive(Debug)]
+pub struct Line<'a> {
+    nb_callers: usize,
+    bytes: usize,
+    symbol: Symbol<'a>,
+}
+
+impl<'a> From<LineTuple<'a>> for Line<'a> {
+    fn from(tuple: LineTuple<'a>) -> Self {
         let (nb_callers, bytes, symbol) = tuple;
-        MassifLine { nb_callers, bytes, symbol }
+        Line { nb_callers, bytes, symbol }
     }
 }
 
-named!(massif_line<&str, MassifLine>,
-       map!(massif_line_tuple, MassifLine::from_tuple));
+type LineTuple<'a> = (usize, usize, Symbol<'a>);
 
-type MassifLineTuple<'a> = (usize, usize, Symbol<'a>);
+#[derive(Debug, PartialEq)]
+pub enum Symbol<'a> {
+    External(&'a str),
+    Internal((&'a str, &'a str)),
+    Ignored((usize, f32)),
+}
 
-named!(massif_line_tuple<&str, MassifLineTuple>,
+named!(massif_line<&str, Line>,
+       map!(massif_line_tuple, Line::from));
+
+named!(massif_line_tuple<&str, LineTuple>,
        terminated!(tuple!(nb_callers, bytes, symbol),
                    do_parse!(opt!(char!('\r')) >> char!('\n') >> ())));
 
@@ -105,33 +130,6 @@ named!(nb_callers<&str, usize>,
 named!(bytes<&str, usize>,
        map_res!(preceded!(space0, digit1),
                 usize::from_str));
-
-#[derive(Debug, PartialEq)]
-pub enum Symbol<'a> {
-    External(&'a str),
-    Internal((&'a str, &'a str)),
-    Ignored((usize, f32)),
-}
-
-impl<'a> Into<(Call, Location)> for Symbol<'a> {
-    fn into(self) -> (Call, Location) {
-        use Symbol::*;
-
-        let call = match self {
-            Internal((address, _)) => Call::Inner(address.to_string()),
-            External(_)            => Call::Leaf,
-            Ignored(_)             => Call::Root,
-        };
-
-        use Location::*;
-        let location = match self {
-            External(description) | Internal((_, description)) => Described(description.to_string()),
-            Ignored((count, threshold))                        => Omitted((count, threshold)),
-        };
-
-        (call, location)
-    }
-}
 
 named!(symbol<&str, Symbol>,
        preceded!(space0,
