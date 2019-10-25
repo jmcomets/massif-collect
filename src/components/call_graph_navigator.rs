@@ -69,8 +69,16 @@ impl<'a> CallGraphNavigator<'a> {
         self.callees_selected = true;
     }
 
+    pub fn are_callees_selected(&self) -> bool {
+        self.callees_selected
+    }
+
     pub fn select_callers(&mut self) {
         self.callees_selected = false;
+    }
+
+    pub fn are_callers_selected(&self) -> bool {
+        !self.callees_selected
     }
 
     fn current(&self) -> &CallList {

@@ -81,8 +81,26 @@ pub fn navigate_call_graph(call_graph: &CallGraph) -> io::Result<()> {
                 Key::PageDown | Key::Char('f') => { app.select_nth_next(size.height as usize); }
                 Key::PageUp | Key::Char('b')   => { app.select_nth_previous(size.height as usize); }
 
-                Key::Left | Key::Char('h')  => { app.select_callers(); }
-                Key::Right | Key::Char('l') => { app.select_callees(); }
+                Key::Left | Key::Char('h')  => {
+                    if !app.are_callers_selected()
+                    {
+                        app.select_callers();
+                    }
+                    else
+                    {
+                        app.enter_selected();
+                    }
+                }
+                Key::Right | Key::Char('l') => {
+                    if !app.are_callees_selected()
+                    {
+                        app.select_callees();
+                    }
+                    else
+                    {
+                        app.enter_selected();
+                    }
+                }
 
                 Key::Char('\n') => { app.enter_selected(); }
                 Key::Backspace  => { app.leave_current(); }
