@@ -5,7 +5,7 @@ extern crate nom;
 
 use petgraph::graphmap::DiGraphMap;
 
-mod app;
+mod ui;
 mod components;
 mod events;
 
@@ -16,7 +16,7 @@ pub type CallId = usize;
 
 pub type CallGraph = DiGraphMap<CallId, Vec<Allocation>>;
 
-pub use app::navigate_call_graph;
+pub use ui::navigate_call_graph;
 
 pub fn read_massif<R: BufRead>(reader: R) -> io::Result<CallGraph> {
     let mut call_index = indexing::CallIndex::new();
