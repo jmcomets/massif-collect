@@ -5,20 +5,24 @@ extern crate nom;
 
 use petgraph::graphmap::DiGraphMap;
 
-mod ui;
-mod components;
-mod events;
+pub mod ui;
 
 mod parsing;
 mod indexing;
 
 pub type CallId = usize;
 
+pub struct CallerTree(Vec<CallerTree>);
+
+impl CallerTree {
+    fn new() -> Self {
+        CallerTree(vec![])
+    }
+}
+
 pub type CallGraph = DiGraphMap<CallId, Vec<Allocation>>;
 
-pub use ui::navigate_call_graph;
-
-pub fn read_massif<R: BufRead>(reader: R) -> io::Result<CallGraph> {
+pub fn read_massif<R: BufRead>(reader: R) -> io::Result<(CallerTree, CallGraph)> {
     let mut call_index = indexing::CallIndex::new();
     let mut call_graph = CallGraph::new();
 
@@ -40,7 +44,9 @@ pub fn read_massif<R: BufRead>(reader: R) -> io::Result<CallGraph> {
             .push(allocation);
     }
 
-    Ok(call_graph)
+    let caller_tree = CallerTree::new();
+
+    Ok((caller_tree, call_graph))
 }
 
 #[derive(Debug, Clone, PartialEq)]

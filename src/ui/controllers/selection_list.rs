@@ -1,14 +1,14 @@
 use std::cmp;
 
-pub struct NavigableSelection<T: AsRef<str>> {
+pub struct SelectionListController<T: AsRef<str>> {
     items: Vec<T>,
     selected: Option<usize>,
 }
 
-impl<T: AsRef<str>> NavigableSelection<T> {
+impl<T: AsRef<str>> SelectionListController<T> {
     pub fn new(items: Vec<T>) -> Self {
         let selected = if !items.is_empty() { Some(0) } else { None };
-        NavigableSelection { items, selected }
+        SelectionListController { items, selected }
     }
 
     pub fn select_first(&mut self) {
