@@ -1,5 +1,5 @@
 mod call_graph;
-pub use call_graph::render_call_graph;
+pub use call_graph::CallGraphWidget;
 
 mod caller_tree;
-pub use caller_tree::render_caller_tree;
+pub use caller_tree::CallerTreeWidget;

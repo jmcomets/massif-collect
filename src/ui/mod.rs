@@ -1,9 +1,11 @@
+use std::fs::File;
 use std::io::{self, Write};
 use std::panic;
 
 use tui::{
     Terminal,
-    backend::TermionBackend,
+    backend::{TermionBackend},
+    widgets::Widget,
 };
 
 use termion::{
@@ -20,6 +22,7 @@ use crate::{
 
 mod controllers;
 mod events;
+mod input;
 mod views;
 
 use self::{
@@ -28,7 +31,8 @@ use self::{
         CallerTreeController,
     },
     events::{Events, Event},
-    views::{render_caller_tree, render_call_graph},
+    input::InputHandler,
+    views::{CallerTreeWidget, CallGraphWidget},
 };
 
 macro_rules! io_error {
@@ -40,90 +44,59 @@ macro_rules! io_error {
     }}
 }
 
-enum Tab {
-    CallerTree,
-    CallGraph,
-}
+pub fn run(output: Option<&str>, caller_tree: &CallerTree, call_graph: &CallGraph) -> io::Result<()> {
+    let output: Box<dyn Write> = if let Some(filename) = output {
+        let file = File::create(filename)?;
+        Box::new(file)
+    } else {
+        let stdout = io::stdout();
+        Box::new(stdout)
+    };
 
-impl Tab {
-    fn next(self) -> Self {
-        match self {
-            Tab::CallerTree => Tab::CallGraph,
-            Tab::CallGraph  => Tab::CallerTree,
-        }
-    }
-}
+    let output = output.into_raw_mode()?;
+    let output = MouseTerminal::from(output);
+    let output = AlternateScreen::from(output);
 
-pub fn run(caller_tree: &CallerTree, call_graph: &CallGraph) -> io::Result<()> {
-    let stdout = io::stdout().into_raw_mode()?;
-    let stdout = MouseTerminal::from(stdout);
-    let stdout = AlternateScreen::from(stdout);
-
-    let backend = TermionBackend::new(stdout);
+    let backend = TermionBackend::new(output);
     set_termion_panic_hook();
 
     let mut terminal = Terminal::new(backend)?;
 
     let events = Events::new();
 
-    let caller_tree = CallerTreeController::new(&caller_tree);
+    let mut caller_tree = CallerTreeController::new(&caller_tree);
     let mut call_graph = CallGraphController::new(&call_graph);
 
-    let mut tab = Tab::CallerTree;
+    let mut tab_index = 0;
 
     loop {
         terminal.draw(|mut f| {
-            match tab {
-                Tab::CallerTree => render_caller_tree(&caller_tree, &mut f),
-                Tab::CallGraph  => render_call_graph(&call_graph, &mut f),
+            let size = f.size();
+            if tab_index == 0 {
+                CallerTreeWidget::new(&caller_tree).render(&mut f, size);
+            } else {
+                CallGraphWidget::new(&call_graph).render(&mut f, size);
             }
         })?;
 
-        // stdout is buffered, flush it to see the effect immediately when hitting backspace
+        // since output is buffered, flush to see the effect immediately when hitting backspace
         io::stdout().flush().ok();
 
-        let size = terminal.size().unwrap();
-
         match events.next().map_err(io_error!("handling events"))? {
-            Event::Input(input) => match input {
-                Key::Char('q') => { break; }
-
-                Key::Down | Key::Char('j') => { call_graph.select_next(); }
-                Key::Up | Key::Char('k')   => { call_graph.select_previous(); }
-                Key::Home                  => { call_graph.select_first(); }
-                Key::End | Key::Char('G')  => { call_graph.select_last(); }
-
-                Key::PageDown | Key::Char('f') => { call_graph.select_nth_next(size.height as usize); }
-                Key::PageUp | Key::Char('b')   => { call_graph.select_nth_previous(size.height as usize); }
-
-                Key::Left | Key::Char('h')  => {
-                    if !call_graph.are_callers_selected()
-                    {
-                        call_graph.select_callers();
+                Event::Input(input) => {
+                    let size = terminal.size().unwrap();
+                    match input {
+                        Key::Char('\t') => { tab_index = (tab_index + 1) % 2 }
+                        input @ _       => {
+                            if tab_index == 0 {
+                                caller_tree.handle_input(size, &input);
+                            } else {
+                                call_graph.handle_input(size, &input);
+                            }
+                        }
                     }
-                    else
-                    {
-                        call_graph.enter_selected();
-                    }
-                }
-                Key::Right | Key::Char('l') => {
-                    if !call_graph.are_callees_selected()
-                    {
-                        call_graph.select_callees();
-                    }
-                    else
-                    {
-                        call_graph.enter_selected();
-                    }
-                }
-
-                Key::Char('\n') => { call_graph.enter_selected(); }
-                Key::Backspace  => { call_graph.leave_current(); }
-
-                Key::Char('\t') => { tab = tab.next(); }
-
-                _ => {}
-            },
+                    if let Key::Char('q') = input { break; }
+                },
             _ => {}
         }
     }

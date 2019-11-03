@@ -3,10 +3,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use termion::{
-    event::Key,
-    input::TermRead,
-};
+use termion::input::TermRead;
+
+pub use termion::event::Key;
 
 pub enum Event<I> {
     Input(I),

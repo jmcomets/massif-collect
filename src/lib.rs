@@ -10,6 +10,7 @@ pub mod ui;
 
 mod parsing;
 mod indexing;
+mod iters;
 
 pub type CallId = usize;
 
@@ -20,6 +21,25 @@ impl CallerTree {
     fn add_caller_tree(&mut self, caller_id: CallId, caller_tree: CallerTree) {
         self.0.insert(caller_id, caller_tree);
     }
+
+    pub fn iter(&self) -> impl Iterator<Item=(CallId, &CallerTree)> {
+        self.0.iter().map(|(&k, v)| (k, v))
+    }
+
+    #[inline]
+    pub fn walk_callers(&self) -> impl Iterator<Item=(CallId, &CallerTree, usize)> {
+        self.walk_callers_box(None, 0)
+    }
+
+    fn walk_callers_box(&self, caller_id: Option<CallId>, depth: usize) -> Box<dyn Iterator<Item=(CallId, &CallerTree, usize)> + '_> {
+        let node = caller_id.map(|caller_id| (caller_id, self, depth));
+        let subtree = self.0.iter().flat_map(move |(&caller_id, caller)| caller.walk_callers_box(Some(caller_id), depth+1));
+        Box::new(iters::PrefixedIter::new(node, subtree))
+    }
+
+    // fn walk_callers_iter(&self) -> impl Iterator<Item=(CallId, &CallerTree)> {
+    //     unimplemented!()
+    // }
 }
 
 #[derive(Debug, Default)]
