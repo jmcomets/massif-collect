@@ -56,7 +56,18 @@ impl<'a> InputHandler for CallGraphController<'a> {
 }
 
 impl<'a> InputHandler for CallerTreeController<'a> {
-    fn handle_input(&mut self, _area: Rect, _input: &Key) {
-        // unimplemented!()
+    fn handle_input(&mut self, area: Rect, input: &Key) {
+        let page_height = area.height as usize;
+        match input {
+            Key::Down | Key::Char('j') => { self.select_next(); }
+            Key::Up | Key::Char('k')   => { self.select_previous(); }
+            Key::Home                  => { self.select_first(); }
+            Key::End | Key::Char('G')  => { self.select_last(); }
+
+            Key::PageDown | Key::Char('f') => { self.select_nth_next(page_height); }
+            Key::PageUp | Key::Char('b') => { self.select_nth_previous(page_height); }
+
+            _ => {}
+        }
     }
 }

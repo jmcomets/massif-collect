@@ -86,6 +86,7 @@ pub fn run(output: Option<&str>, caller_tree: &CallerTree, call_graph: &CallGrap
                 Event::Input(input) => {
                     let size = terminal.size().unwrap();
                     match input {
+                        Key::Char('q') => { break; }
                         Key::Char('\t') => { tab_index = (tab_index + 1) % 2 }
                         input @ _       => {
                             if tab_index == 0 {
@@ -95,7 +96,6 @@ pub fn run(output: Option<&str>, caller_tree: &CallerTree, call_graph: &CallGrap
                             }
                         }
                     }
-                    if let Key::Char('q') = input { break; }
                 },
             _ => {}
         }

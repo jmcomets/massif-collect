@@ -11,11 +11,27 @@ impl<'a> CallerTreeController<'a> {
         CallerTreeController { root, skip: 0, stack: vec![] }
     }
 
+    pub fn select_first(&mut self) {
+        unimplemented!()
+    }
+
+    pub fn select_last(&mut self) {
+        unimplemented!()
+    }
+
     pub fn select_next(&mut self) {
         unimplemented!()
     }
 
     pub fn select_previous(&mut self) {
+        unimplemented!()
+    }
+
+    pub fn select_nth_next(&mut self, _n: usize) {
+        unimplemented!()
+    }
+
+    pub fn select_nth_previous(&mut self, _n: usize) {
         unimplemented!()
     }
 
