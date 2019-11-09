@@ -73,7 +73,6 @@ pub fn run(output: Option<&str>, caller_tree: &CallerTree, call_graph: &CallGrap
         terminal.draw(|mut f| {
             let size = f.size();
             if tab_index == 0 {
-                caller_tree.pad(size.height as usize);
                 CallerTreeWidget::new(&caller_tree).render(&mut f, size);
             } else {
                 CallGraphWidget::new(&call_graph).render(&mut f, size);

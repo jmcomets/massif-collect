@@ -1,7 +1,7 @@
 use tui::{
     buffer::Buffer,
     layout::Rect,
-    style::Style,
+    style::{Color, Style},
     widgets::Widget,
 };
 
@@ -17,11 +17,15 @@ impl<'a> CallerTreeWidget<'a> {
 
 impl<'a> Widget for CallerTreeWidget<'a> {
     fn draw(&mut self, area: Rect, buf: &mut Buffer) {
-        for (y, (caller_id, allocation, depth)) in self.0.iter().enumerate().take(area.height as usize) {
+        for (y, (id, nb_callers, allocation, depth)) in self.0.iter().enumerate().take(area.height as usize) {
             let indent = depth as u16 * 2;
             if indent < area.x + area.width {
-                let line = format!("Allocation for {}: {:?}", caller_id, allocation);
-                buf.set_string(indent, y as u16, line, Style::default());
+                let line = format!("[{}] {}: {:?}", nb_callers, id, allocation);
+                let mut style = Style::default();
+                if self.0.is_selected(y) {
+                    style = style.fg(Color::Black).bg(Color::White);
+                }
+                buf.set_string(indent, y as u16, line, style);
             }
         }
         // Node

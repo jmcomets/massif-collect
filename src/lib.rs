@@ -14,10 +14,10 @@ mod indexing;
 pub type CallId = usize;
 
 #[derive(Debug, Default)]
-pub struct CallerTree(Vec<CallerTreeNode>);
+pub struct CallerTree(Vec<(CallId, CallerTreeNode)>);
 
 impl CallerTree {
-    pub fn iter(&self) -> impl Iterator<Item=&CallerTreeNode> {
+    pub fn iter(&self) -> impl Iterator<Item=&(CallId, CallerTreeNode)> {
         self.0.iter()
     }
 
@@ -30,7 +30,7 @@ impl CallerTree {
 pub struct CallerTreeNode(Vec<(CallId, CallerTreeNode, Allocation)>);
 
 impl CallerTreeNode {
-    pub fn iter(&self) -> impl Iterator<Item=(CallId, &CallerTreeNode, &Allocation)> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item=(CallId, &CallerTreeNode, &Allocation)> {
         self.0.iter().map(|(id, node, allocation)| (*id, node, allocation))
     }
 
@@ -84,7 +84,7 @@ impl CallerTreeBuilder {
                 let allocation = self.allocations.pop().unwrap();
                 callee_tree_node.0.push((call_id, caller_tree_node, allocation));
             } else {
-                self.tree.0.push(caller_tree_node);
+                self.tree.0.push((call_id, caller_tree_node));
             }
         }
     }
