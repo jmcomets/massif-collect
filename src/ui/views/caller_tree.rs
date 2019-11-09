@@ -17,7 +17,7 @@ impl<'a> CallerTreeWidget<'a> {
 
 impl<'a> Widget for CallerTreeWidget<'a> {
     fn draw(&mut self, area: Rect, buf: &mut Buffer) {
-        for (y, (caller_id, _, depth)) in self.0.iter().enumerate().take(area.height as usize) {
+        for (y, (caller_id, depth)) in self.0.iter().enumerate().take(area.height as usize) {
             let indent = depth as u16 * 2;
             if indent < area.x + area.width {
                 let line = format!("Node {:?}", caller_id);

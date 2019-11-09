@@ -10,47 +10,28 @@ pub mod ui;
 
 mod parsing;
 mod indexing;
-mod iters;
 
 pub type CallId = usize;
 
 #[derive(Debug, Default)]
-pub struct CallerTree(HashMap<CallId, CallerTree>);
+pub struct CallerTree(HashMap<CallId, (CallerTree, Allocation)>);
 
 impl CallerTree {
-    fn add_caller_tree(&mut self, caller_id: CallId, caller_tree: CallerTree) {
-        self.0.insert(caller_id, caller_tree);
-    }
-
     pub fn iter(&self) -> impl Iterator<Item=(CallId, &CallerTree)> {
-        self.0.iter().map(|(&k, v)| (k, v))
+        self.0.iter().map(|(&k, (v, _))| (k, v))
     }
-
-    #[inline]
-    pub fn walk_callers(&self) -> impl Iterator<Item=(CallId, &CallerTree, usize)> {
-        self.walk_callers_box(None, 0)
-    }
-
-    fn walk_callers_box(&self, caller_id: Option<CallId>, depth: usize) -> Box<dyn Iterator<Item=(CallId, &CallerTree, usize)> + '_> {
-        let node = caller_id.map(|caller_id| (caller_id, self, depth));
-        let subtree = self.0.iter().flat_map(move |(&caller_id, caller)| caller.walk_callers_box(Some(caller_id), depth+1));
-        Box::new(iters::PrefixedIter::new(node, subtree))
-    }
-
-    // fn walk_callers_iter(&self) -> impl Iterator<Item=(CallId, &CallerTree)> {
-    //     unimplemented!()
-    // }
 }
 
 #[derive(Debug, Default)]
 struct CallerTreeBuilder{
     root: CallerTree,
     caller_stack: Vec<(CallId, CallerTree)>,
+    allocations: Vec<Allocation>,
     partial_trees: HashSet<CallId>,
 }
 
 impl CallerTreeBuilder {
-    fn add_call(&mut self, caller_id: CallId, callee_id: CallId) -> Result<(), CycleDetected> {
+    fn add_call(&mut self, caller_id: CallId, callee_id: CallId, allocation: Allocation) -> Result<(), CycleDetected> {
         if self.partial_trees.contains(&caller_id) {
             return Err(CycleDetected(caller_id, callee_id));
         }
@@ -63,6 +44,9 @@ impl CallerTreeBuilder {
         }
 
         self.caller_stack.push((caller_id, CallerTree::default()));
+        self.allocations.push(allocation);
+        debug_assert_eq!(self.allocations.len() + 1, self.caller_stack.len());
+
         // note that we don't mark the caller as "partial" to allow sibling calls
 
         Ok(())
@@ -77,11 +61,12 @@ impl CallerTreeBuilder {
             self.partial_trees.remove(&call_id);
 
             let (_, caller_tree) = self.caller_stack.pop().unwrap();
+            let allocation = self.allocations.pop().unwrap();
             let callee_tree = self.caller_stack.last_mut()
                 .map(|(_, callee_tree)| callee_tree)
                 .unwrap_or(&mut self.root);
 
-            callee_tree.add_caller_tree(call_id, caller_tree);
+            callee_tree.0.insert(call_id, (caller_tree, allocation));
         }
     }
 
@@ -115,7 +100,7 @@ pub fn read_massif<R: BufRead>(reader: R) -> io::Result<(CallerTree, CallGraph)>
 
         let caller_id = call_index.index(caller);
 
-        caller_tree_builder.add_call(caller_id, callee_id).unwrap();
+        caller_tree_builder.add_call(caller_id, callee_id, allocation.clone()).unwrap();
 
         call_graph.edge_entry(caller_id, callee_id)
             .or_insert(vec![])
@@ -134,7 +119,7 @@ pub enum Call {
     Root,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Allocation {
     pub bytes: usize,
     pub location: Location,
@@ -146,7 +131,7 @@ impl Allocation {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Location {
     Described(String),
     Omitted((usize, f32)),
