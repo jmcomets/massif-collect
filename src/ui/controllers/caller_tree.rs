@@ -112,8 +112,17 @@ impl<'a> CallerTreeController<'a> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item=(CallId, usize, &Allocation, usize)> + '_ {
-        self.before_selected.iter().map(|&(id, node, allocation, depth)| (id, node.len(), allocation, depth)).chain(
-            self.after_selected.iter().map(|&(id, node, allocation, depth)| (id, node.len(), allocation, depth))
-        )
+        macro_rules! transform_item {
+            () => {{
+                |&(id, node, allocation, depth)| {
+                    (id, node.len(), allocation, depth)
+                }
+            }}
+        }
+
+        let before = self.before_selected.iter().map(transform_item!());
+        let after = self.after_selected.iter().map(transform_item!());
+
+        before.chain(after)
     }
 }
