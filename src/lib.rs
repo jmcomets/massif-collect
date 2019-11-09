@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::{self, BufRead};
 
 #[macro_use]
@@ -14,18 +14,35 @@ mod indexing;
 pub type CallId = usize;
 
 #[derive(Debug, Default)]
-pub struct CallerTree(HashMap<CallId, (CallerTree, Allocation)>);
+pub struct CallerTree(Vec<CallerTreeNode>);
 
 impl CallerTree {
-    pub fn iter(&self) -> impl Iterator<Item=(CallId, &CallerTree)> {
-        self.0.iter().map(|(&k, (v, _))| (k, v))
+    pub fn iter(&self) -> impl Iterator<Item=&CallerTreeNode> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct CallerTreeNode(Vec<(CallId, CallerTreeNode, Allocation)>);
+
+impl CallerTreeNode {
+    pub fn iter(&self) -> impl Iterator<Item=(CallId, &CallerTreeNode, &Allocation)> {
+        self.0.iter().map(|(id, node, allocation)| (*id, node, allocation))
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
 #[derive(Debug, Default)]
 struct CallerTreeBuilder{
-    root: CallerTree,
-    caller_stack: Vec<(CallId, CallerTree)>,
+    tree: CallerTree,
+    caller_stack: Vec<(CallId, CallerTreeNode)>,
     allocations: Vec<Allocation>,
     partial_trees: HashSet<CallId>,
 }
@@ -39,11 +56,11 @@ impl CallerTreeBuilder {
         // the callee should be on top of the caller_stack
         self.unwind_until(Some(callee_id));
         if self.caller_stack.is_empty() {
-            self.caller_stack.push((callee_id, CallerTree::default()));
+            self.caller_stack.push((callee_id, CallerTreeNode::default()));
             self.partial_trees.insert(callee_id);
         }
 
-        self.caller_stack.push((caller_id, CallerTree::default()));
+        self.caller_stack.push((caller_id, CallerTreeNode::default()));
         self.allocations.push(allocation);
         debug_assert_eq!(self.allocations.len() + 1, self.caller_stack.len());
 
@@ -60,19 +77,21 @@ impl CallerTreeBuilder {
 
             self.partial_trees.remove(&call_id);
 
-            let (_, caller_tree) = self.caller_stack.pop().unwrap();
-            let allocation = self.allocations.pop().unwrap();
-            let callee_tree = self.caller_stack.last_mut()
-                .map(|(_, callee_tree)| callee_tree)
-                .unwrap_or(&mut self.root);
+            let (_, mut caller_tree_node) = self.caller_stack.pop().unwrap();
+            caller_tree_node.0.sort_by_key(|(id, _, _)| *id);
 
-            callee_tree.0.insert(call_id, (caller_tree, allocation));
+            if let Some((_, callee_tree_node)) = self.caller_stack.last_mut() {
+                let allocation = self.allocations.pop().unwrap();
+                callee_tree_node.0.push((call_id, caller_tree_node, allocation));
+            } else {
+                self.tree.0.push(caller_tree_node);
+            }
         }
     }
 
     fn build(mut self) -> CallerTree {
         self.unwind_until(None);
-        self.root
+        self.tree
     }
 }
 
@@ -84,7 +103,7 @@ pub type CallGraph = DiGraphMap<CallId, Vec<Allocation>>;
 pub fn read_massif<R: BufRead>(reader: R) -> io::Result<(CallerTree, CallGraph)> {
     let mut call_index = indexing::CallIndex::new();
 
-    let mut caller_tree_builder = CallerTreeBuilder::default();
+    let mut caller_tree_node_builder = CallerTreeBuilder::default();
     let mut call_graph = CallGraph::new();
 
     for entry in parsing::massif_tree(reader) {
@@ -100,16 +119,16 @@ pub fn read_massif<R: BufRead>(reader: R) -> io::Result<(CallerTree, CallGraph)>
 
         let caller_id = call_index.index(caller);
 
-        caller_tree_builder.add_call(caller_id, callee_id, allocation.clone()).unwrap();
+        caller_tree_node_builder.add_call(caller_id, callee_id, allocation.clone()).unwrap();
 
         call_graph.edge_entry(caller_id, callee_id)
             .or_insert(vec![])
             .push(allocation);
     }
 
-    let caller_tree = caller_tree_builder.build();
+    let caller_tree_node = caller_tree_node_builder.build();
 
-    Ok((caller_tree, call_graph))
+    Ok((caller_tree_node, call_graph))
 }
 
 #[derive(Debug, Clone, PartialEq)]

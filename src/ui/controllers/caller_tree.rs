@@ -1,24 +1,21 @@
-use crate::{CallId, CallerTree};
+use crate::{CallId, CallerTree, CallerTreeNode, Allocation};
 
-type Node<'a> = (Option<CallId>, &'a CallerTree);
-
-type CallerTreeStack<'a> = Vec<(Node<'a>, usize)>;
+type CallerTreeStack<'a> = Vec<((Option<CallId>, &'a CallerTreeNode), usize)>;
 
 pub struct CallerTreeController<'a> {
+    tree: &'a CallerTree,
+    skip: usize,
     stack: CallerTreeStack<'a>,
 }
 
 impl<'a> CallerTreeController<'a> {
-    pub fn new(root: &'a CallerTree) -> Self {
-        CallerTreeController { stack: vec![((None, root), 0)] }
+    pub fn new(tree: &'a CallerTree) -> Self {
+        CallerTreeController { tree, skip: 0, stack: vec![] }
     }
 
-    pub fn select_first(&mut self) {
-        unimplemented!()
-    }
-
-    pub fn select_last(&mut self) {
-        unimplemented!()
+    pub fn reset(&mut self) {
+        self.skip = 0;
+        self.stack.clear();
     }
 
     pub fn select_next(&mut self) {
@@ -37,10 +34,14 @@ impl<'a> CallerTreeController<'a> {
         unimplemented!()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item=(CallId, usize)> + '_ {
-        self.stack.iter().enumerate().rev()
-            .flat_map(|(depth, &((_, tree), skip))| {
-                tree.iter().skip(skip).map(move |(caller_id, _)| (caller_id, depth))
-            })
+    pub fn iter(&self) -> impl Iterator<Item=(CallId, &Allocation, usize)> + '_ {
+        if !self.stack.is_empty() {
+            self.stack.iter().enumerate().rev()
+                .flat_map(|(depth, &((_, subtree), skip))| {
+                    subtree.iter().skip(skip)
+                            .map(move |(id, _, allocation)| (id, allocation, depth))
+                })
+        } else {
+        }
     }
 }

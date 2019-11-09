@@ -61,8 +61,7 @@ impl<'a> InputHandler for CallerTreeController<'a> {
         match input {
             Key::Down | Key::Char('j') => { self.select_next(); }
             Key::Up | Key::Char('k')   => { self.select_previous(); }
-            Key::Home                  => { self.select_first(); }
-            Key::End | Key::Char('G')  => { self.select_last(); }
+            Key::Home                  => { self.reset(); }
 
             Key::PageDown | Key::Char('f') => { self.select_nth_next(page_height); }
             Key::PageUp | Key::Char('b') => { self.select_nth_previous(page_height); }
