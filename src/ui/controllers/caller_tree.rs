@@ -1,7 +1,7 @@
 use std::collections::{LinkedList, HashSet};
 use crate::{CallId, CallerTree, CallerTreeNode, Allocation};
 
-type Item<'a> = (CallId, &'a CallerTreeNode, &'a Allocation, usize);
+type Item<'a> = (CallId, &'a CallerTreeNode, &'a Allocation, usize, f64);
 
 pub struct CallerTreeController<'a> {
     tree: &'a CallerTree,
@@ -38,9 +38,9 @@ impl<'a> CallerTreeController<'a> {
     }
 
     pub fn toggle_selected(&mut self) {
-        if let Some(selected_id) = self.after_selected.front().map(|(id, _, _, _)| *id) {
+        if let Some(selected_id) = self.after_selected.front().map(|(id, _, _, _, _)| *id) {
             let selected = self.after_selected.pop_front().unwrap();
-            let (_, ref node, _, depth) = selected;
+            let (_, ref node, _, depth, _) = selected;
 
             let selected_is_expanded = self.expanded.contains(&selected_id);
             if selected_is_expanded {
@@ -65,11 +65,17 @@ impl<'a> CallerTreeController<'a> {
     }
 
     fn expand_node(&mut self, selected_node: &'a CallerTreeNode, depth: usize) {
+        let total_allocation: usize = selected_node.iter()
+            .map(|(_, _, allocation)| allocation.bytes)
+            .sum();
+        let total_allocation = total_allocation as f64;
+
         for (id, node, allocation) in selected_node.iter().rev() {
             if self.expanded.contains(&id) {
                 self.expand_node(node, depth);
             }
-            self.after_selected.push_front((id, node, allocation, depth));
+            let ratio = allocation.bytes as f64 / total_allocation;
+            self.after_selected.push_front((id, node, allocation, depth, ratio));
         }
     }
 
@@ -111,11 +117,11 @@ impl<'a> CallerTreeController<'a> {
         self.before_selected.len() == index
     }
 
-    pub fn iter(&self) -> impl Iterator<Item=(CallId, usize, &Allocation, usize)> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item=(CallId, usize, &Allocation, usize, f64)> + '_ {
         macro_rules! transform_item {
             () => {{
-                |&(id, node, allocation, depth)| {
-                    (id, node.len(), allocation, depth)
+                |&(id, node, allocation, depth, ratio)| {
+                    (id, node.len(), allocation, depth, ratio)
                 }
             }}
         }
