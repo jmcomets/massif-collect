@@ -59,12 +59,12 @@ impl<'a> InputHandler for CallerTreeController<'a> {
     fn handle_input(&mut self, area: Rect, input: &Key) {
         let page_height = area.height as usize;
         match input {
-            Key::Down | Key::Char('j') => { self.select_next(); }
+            Key::Down | Key::Char('j') => { self.select_next(page_height); }
             Key::Up | Key::Char('k')   => { self.select_previous(); }
             Key::Home                  => { self.reset(); }
             Key::Char('\n')            => { self.toggle_selected(); }
 
-            Key::PageDown | Key::Char('f') => { self.select_nth_next(page_height); }
+            Key::PageDown | Key::Char('f') => { self.select_nth_next(page_height, page_height); }
             Key::PageUp | Key::Char('b') => { self.select_nth_previous(page_height); }
 
             _ => {}

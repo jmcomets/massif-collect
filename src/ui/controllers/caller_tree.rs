@@ -5,6 +5,7 @@ type Item<'a> = (CallId, &'a CallerTreeNode, Option<&'a Allocation>, usize);
 
 pub struct CallerTreeController<'a> {
     tree: &'a CallerTree,
+    skipped: LinkedList<Item<'a>>,
     before_selected: LinkedList<Item<'a>>,
     after_selected: LinkedList<Item<'a>>,
     expanded: HashSet<CallId>, // TODO replace with a bitset
@@ -14,6 +15,7 @@ impl<'a> CallerTreeController<'a> {
     pub fn new(tree: &'a CallerTree) -> Self {
         let mut controller = CallerTreeController {
             tree,
+            skipped: <_>::default(),
             before_selected: <_>::default(),
             after_selected: <_>::default(),
             expanded: <_>::default(),
@@ -25,6 +27,7 @@ impl<'a> CallerTreeController<'a> {
     }
 
     pub fn reset(&mut self) {
+        self.skipped.clear();
         self.before_selected.clear();
         self.after_selected.clear();
         self.after_selected.extend(self.tree.iter().map(|(id, node)| (*id, node, None, 0)));
@@ -68,41 +71,33 @@ impl<'a> CallerTreeController<'a> {
     }
 
 
-    pub fn select_next(&mut self) {
-        self.select_nth_next(1)
+    pub fn select_next(&mut self, limit: usize) {
+        self.select_nth_next(1, limit)
     }
 
     pub fn select_previous(&mut self) {
         self.select_nth_previous(1)
     }
 
-    pub fn select_nth_next(&mut self, mut n: usize) {
-        loop {
-            if n == 0 {
-                break;
-            }
-            n -= 1;
-
-            if self.after_selected.len() == 1 {
+    pub fn select_nth_next(&mut self, n: usize, limit: usize) {
+        for _ in 0..n {
+            if self.after_selected.len() <= 1 {
                 break;
             }
 
-            if let Some(item) = self.after_selected.pop_front() {
-                self.before_selected.push_back(item);
-            } else {
-                break;
-            }
+            let item = self.after_selected.pop_front().unwrap();
+            self.before_selected.push_back(item);
+        }
+
+        for _ in limit..self.before_selected.len()+1 {
+            let item = self.before_selected.pop_front().unwrap();
+            self.skipped.push_back(item);
         }
     }
 
-    pub fn select_nth_previous(&mut self, mut n: usize) {
-        loop {
-            if n == 0 {
-                break;
-            }
-            n -= 1;
-
-            if let Some(item) = self.before_selected.pop_back() {
+    pub fn select_nth_previous(&mut self, n: usize) {
+        for _ in 0..n {
+            if let Some(item) = self.before_selected.pop_back().or_else(|| self.skipped.pop_back()) {
                 self.after_selected.push_front(item);
             } else {
                 break;
