@@ -1,7 +1,7 @@
 use std::collections::{LinkedList, HashSet};
 use crate::{CallId, CallerTree, CallerTreeNode, Allocation};
 
-type Item<'a> = (CallId, &'a CallerTreeNode, Option<&'a Allocation>, usize);
+type Item<'a> = (CallId, &'a CallerTreeNode, &'a Allocation, usize);
 
 pub struct CallerTreeController<'a> {
     tree: &'a CallerTree,
@@ -30,8 +30,11 @@ impl<'a> CallerTreeController<'a> {
         self.skipped.clear();
         self.before_selected.clear();
         self.after_selected.clear();
-        self.after_selected.extend(self.tree.iter().map(|(id, node)| (*id, node, None, 0)));
         self.expanded.clear();
+
+        for (_, node) in self.tree.iter().rev() {
+            self.expand_node(node, 0);
+        }
     }
 
     pub fn toggle_selected(&mut self) {
@@ -44,8 +47,8 @@ impl<'a> CallerTreeController<'a> {
                 self.fold_node(node);
                 self.expanded.remove(&selected_id);
             } else {
-                self.expand_node(node, depth + 1);
                 self.expanded.insert(selected_id);
+                self.expand_node(node, depth+1);
             }
 
             self.after_selected.push_front(selected);
@@ -64,12 +67,11 @@ impl<'a> CallerTreeController<'a> {
     fn expand_node(&mut self, selected_node: &'a CallerTreeNode, depth: usize) {
         for (id, node, allocation) in selected_node.iter().rev() {
             if self.expanded.contains(&id) {
-                self.expand_node(node, depth + 1);
+                self.expand_node(node, depth);
             }
-            self.after_selected.push_front((id, node, Some(allocation), depth));
+            self.after_selected.push_front((id, node, allocation, depth));
         }
     }
-
 
     pub fn select_next(&mut self, limit: usize) {
         self.select_nth_next(1, limit)
@@ -109,7 +111,7 @@ impl<'a> CallerTreeController<'a> {
         self.before_selected.len() == index
     }
 
-    pub fn iter(&self) -> impl Iterator<Item=(CallId, usize, Option<&Allocation>, usize)> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item=(CallId, usize, &Allocation, usize)> + '_ {
         self.before_selected.iter().map(|&(id, node, allocation, depth)| (id, node.len(), allocation, depth)).chain(
             self.after_selected.iter().map(|&(id, node, allocation, depth)| (id, node.len(), allocation, depth))
         )

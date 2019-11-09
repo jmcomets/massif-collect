@@ -17,7 +17,7 @@ pub type CallId = usize;
 pub struct CallerTree(Vec<(CallId, CallerTreeNode)>);
 
 impl CallerTree {
-    pub fn iter(&self) -> impl Iterator<Item=&(CallId, CallerTreeNode)> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item=&(CallId, CallerTreeNode)> {
         self.0.iter()
     }
 
