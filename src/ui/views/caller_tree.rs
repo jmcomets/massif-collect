@@ -1,7 +1,9 @@
+use std::fmt::Write;
+
 use tui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     widgets::Widget,
 };
 
@@ -17,21 +19,31 @@ impl<'a> CallerTreeWidget<'a> {
 
 impl<'a> Widget for CallerTreeWidget<'a> {
     fn draw(&mut self, area: Rect, buf: &mut Buffer) {
-        for (y, (id, nb_callers, allocation, depth, ratio)) in self.0.iter().enumerate().take(area.height as usize) {
-            let indent = depth as u16 * 2;
-            if indent < area.x + area.width {
-                let line = format!("[{}] {}: {:?}", nb_callers, id, allocation);
-                let mut style = Style::default();
-                if self.0.is_selected(y) {
-                    style = style.fg(Color::Black);
+        for (i, (id, nb_callers, allocation, depth, ratio)) in self.0.iter().enumerate().take(area.height as usize) {
+            let indent = depth * 2;
+            if (indent as u16) < area.right() {
+                let (x, y) = (area.left(), area.top() + i as u16);
+
+                // pad the line to include the indent & at least the area's width
+                let mut line = String::with_capacity(area.width as usize);
+                for _ in 0..indent { line.push(' '); }
+                write!(&mut line, "[{}] {}: {:?}", nb_callers, id, allocation).unwrap();
+                for _ in line.len()..area.width as usize { line.push(' '); }
+
+                let mut style = Style::default().fg(Color::Black);
+
+                if self.0.is_selected(i) {
+                    style = style.modifier(Modifier::BOLD);
+                    // TODO highlight the selected item
                 }
 
-                let background = if ratio > 0.75 { Color::Rgb(255,   0,   0) }
-                            else if ratio > 0.5  { Color::Rgb(255, 165,   0) }
-                            else if ratio > 0.25 { Color::Rgb(255, 255,   0) }
-                            else                 { Color::Rgb(255, 255, 255) };
-                style = style.bg(background);
-                buf.set_string(indent, y as u16, line, style);
+                // map the allocation ratio to a color
+                debug_assert!(ratio <= 1.);
+                let red_level = 255 as u8;
+                let other_levels = ((1. - ratio) * 255.) as u8;
+                style = style.bg(Color::Rgb(red_level, other_levels, other_levels));
+
+                buf.set_string(x, y, line, style);
             }
         }
     }
