@@ -1,12 +1,14 @@
+use std::collections::HashMap;
 use std::io::{self, BufRead};
+use std::iter::FromIterator;
 use std::str::FromStr;
 
-use nom::character::streaming::{space0, space1, digit1, hex_digit1, not_line_ending};
+use nom::character::streaming::{space0, space1, digit1, hex_digit1, line_ending, not_line_ending};
 use nom::number::streaming::float;
 
 use crate::{Call, Allocation, Location};
 
-pub fn massif_tree<R: BufRead>(reader: R) -> Iter<R> {
+pub fn read_massif_tree<R: BufRead>(reader: R) -> Iter<R> {
     Iter {
         reader,
         lineno: 0,
@@ -40,7 +42,7 @@ impl<R: BufRead> Iterator for Iter<R> {
         }
 
         self.lineno += 1;
-        let parsed_line = try_iter!(massif_line(&self.line)
+        let parsed_line = try_iter!(massif_sample(&self.line)
             .map(|(_, parsed)| parsed)
             .map_err(|e| {
                 io::Error::new(io::ErrorKind::Other,
@@ -76,92 +78,123 @@ impl<R: BufRead> Iterator for Iter<R> {
 }
 
 fn split_symbol(symbol: Symbol) -> (Call, Location) {
-    use Symbol::*;
-
     let call = match symbol {
-        Internal((address, _)) => Call::Inner(address.to_string()),
-        External(_)            => Call::Leaf,
-        Ignored(_)             => Call::Root,
+        Symbol::Sampled(Some(address), _) => Call::Inner(address.to_string()),
+        Symbol::Sampled(None, _)          => Call::Leaf,
+        Symbol::Ignored(_, _)          => Call::Root,
     };
 
     use Location::*;
     let location = match symbol {
-        External(description) | Internal((_, description)) => Described(description.to_string()),
-        Ignored((count, threshold))                        => Omitted((count, threshold)),
+        Symbol::Sampled(_, description)        => Described(description.to_string()),
+        Symbol::Ignored(count, threshold) => Omitted((count, threshold)),
     };
 
     (call, location)
 }
 
-#[derive(Debug)]
-pub struct Line<'a> {
+named!(massif_snapshot<&str, (SnapshotId, Attributes, Tree)>,
+       do_parse!(
+           snapshot: snapshot_id >>
+           attributes: massif_attributes >>
+           tree: massif_tree >>
+           (snapshot, attributes, tree)));
+
+#[allow(dead_code)]
+type SnapshotId = usize;
+
+named!(snapshot_id<&str, SnapshotId>,
+       delimited!(snapshot_separator,
+           map_res!(snapshot_attribute, FromStr::from_str),
+           snapshot_separator));
+
+named!(snapshot_separator<&str, ()>,
+       do_parse!(space0 >> char!('#') >> many1!(char!('-')) >> line_ending >> (())));
+
+// TODO factorize this parser with the `attribute` parser
+named!(snapshot_attribute<&str, &str>,
+    do_parse!(
+        tag!("snapshot") >> char!('=')  >>
+        value: digit1    >> line_ending >>
+        (value)));
+
+#[allow(dead_code)]
+type Attributes<'a> = HashMap<&'a str, &'a str>;
+
+named!(massif_attributes<&str, Attributes>,
+       map!(many0!(massif_attribute), Attributes::from_iter));
+
+named!(massif_attribute<&str, (&str, &str)>,
+       do_parse!(
+           key: take_until!("=")  >> char!('=')  >>
+           value: not_line_ending >> line_ending >>
+           (key, value)));
+
+#[derive(Debug, PartialEq)]
+struct Tree<'a> {
+    sample: Sample<'a>,
+    callers: Vec<Tree<'a>>,
+}
+
+named!(massif_tree<&str, Tree>,
+       do_parse!(
+           sample: massif_sample                                   >>
+           callers: many_m_n!(0, sample.nb_callers, massif_tree) >>
+           (Tree { sample, callers })));
+
+#[derive(Debug, PartialEq)]
+pub struct Sample<'a> {
     nb_callers: usize,
     bytes: usize,
     symbol: Symbol<'a>,
 }
 
-impl<'a> From<LineTuple<'a>> for Line<'a> {
-    fn from(tuple: LineTuple<'a>) -> Self {
-        let (nb_callers, bytes, symbol) = tuple;
-        Line { nb_callers, bytes, symbol }
-    }
-}
-
-type LineTuple<'a> = (usize, usize, Symbol<'a>);
-
 #[derive(Debug, PartialEq)]
 pub enum Symbol<'a> {
-    External(&'a str),
-    Internal((&'a str, &'a str)),
-    Ignored((usize, f32)),
+    Sampled(Option<&'a str>, &'a str),
+    Ignored(usize, f32),
 }
 
-named!(massif_line<&str, Line>,
-       map!(massif_line_tuple, Line::from));
-
-named!(massif_line_tuple<&str, LineTuple>,
-       terminated!(tuple!(nb_callers, bytes, symbol),
-                   do_parse!(opt!(char!('\r')) >> char!('\n') >> ())));
-
-named!(nb_callers<&str, usize>,
-       map_res!(preceded!(space0, terminated!(preceded!(char!('n'), digit1), char!(':'))),
-                usize::from_str));
-
-named!(bytes<&str, usize>,
-       map_res!(preceded!(space0, digit1),
-                usize::from_str));
-
-named!(symbol<&str, Symbol>,
-       preceded!(space0,
-                 alt!(map!(ignored_places, Symbol::Ignored)
-                      |
-                      map!(internal_address, Symbol::Internal)
-                      |
-                      map!(external_call, Symbol::External))));
-
-named!(ignored_places<&str, (usize, f32)>,
+named!(massif_sample<&str, Sample>,
        do_parse!(
-           tag!("in ")                                  >>
-           nb_places: map_res!(digit1, usize::from_str) >>
-           tag!(" place") >> opt!(char!('s'))           >>
-           tag!(", ") >> opt!(tag!("all "))             >>
-           tag!("below massif's threshold (")           >>
-           threshold: float                             >>
-           tag!("%)")                                   >>
+           space0                                                           >>
+           nb_callers: delimited!(char!('n'), positive_integer, char!(':')) >>
+           space1                                                           >>
+           bytes: positive_integer                                          >>
+           space1                                                           >>
+           symbol: massif_symbol                                            >>
+           space0                                                           >>
+           line_ending                                                      >>
+           (Sample { nb_callers, bytes, symbol })));
+
+named!(massif_symbol<&str, Symbol>,
+       alt!(map!(massif_ignored_call,
+                |(count, threshold)| Symbol::Ignored(count, threshold))
+            |
+            map!(massif_sampled_call,
+                |(address, description)| Symbol::Sampled(address, description))));
+
+named!(massif_ignored_call<&str, (usize, f32)>,
+       do_parse!(
+           tag!("in ")                         >>
+           nb_places: positive_integer         >>
+           tag!(" place") >> opt!(char!('s'))  >>
+           tag!(", ") >> opt!(tag!("all "))    >>
+           tag!("below massif's threshold (")  >>
+           threshold: float                    >>
+           tag!("%)")                          >>
            (nb_places, threshold)));
 
-named!(internal_address<&str, (&str, &str)>,
+named!(massif_sampled_call<&str, (Option<&str>, &str)>,
        do_parse!(
-           address: hex_address >> char!(':') >> space1 >>
-           description: description >>
+           address: opt!(terminated!(hex_address, char!(':'))) >> space0 >>
+           description: not_line_ending                                  >>
            (address, description)));
 
 named!(hex_address<&str, &str>,
        preceded!(tag!("0x"), hex_digit1));
 
-named!(external_call<&str, &str>, call!(description));
-
-named!(description<&str, &str>, call!(not_line_ending));
+named!(positive_integer<&str, usize>, map_res!(digit1, usize::from_str));
 
 #[cfg(test)]
 mod tests {
@@ -169,53 +202,47 @@ mod tests {
     use std::io::BufReader;
 
     #[test]
-    fn it_parses_the_number_of_callers() {
-        assert_eq!(nb_callers(" n123: "), Ok((" ", 123)));
-    }
-
-    #[test]
-    fn it_parses_the_number_of_bytes() {
-        assert_eq!(bytes(" 456 "), Ok((" ", 456)));
-    }
-
-    #[test]
-    fn it_parses_ignored_places() {
-        assert_eq!(ignored_places("in 1 place, below massif's threshold (0.01%)"), Ok(("", (1, 0.01))))
+    fn it_parses_ignored_calls() {
+        assert_eq!(massif_ignored_call("in 1 place, below massif's threshold (0.01%)"), Ok(("", (1, 0.01))))
     }
 
     #[test]
     fn it_parses_symbols() {
         use Symbol::*;
-        assert_eq!(symbol("(heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n"), Ok(("\n", External("(heap allocation functions) malloc/new/new[], --alloc-fns, etc."))));
-        assert_eq!(symbol("0x4E23FC67: std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)\n"), Ok(("\n", Internal(("4E23FC67", "std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)")))));
-        assert_eq!(symbol("in 1 place, below massif's threshold (0.01%)"), Ok(("", Ignored((1, 0.01)))));
-        assert_eq!(symbol("in 5 places, below massif's threshold (0.01%)"), Ok(("", Ignored((5, 0.01)))));
-        assert_eq!(symbol("in 9570 places, all below massif's threshold (0.01%)\n"),
-                   Ok(("\n", Ignored((9570, 0.01)))));
+        assert_eq!(massif_symbol("(heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n").map(|(_, o)| o),
+                   Ok(Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.")));
+        assert_eq!(massif_symbol("0x4E23FC67: std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)\n").map(|(_, o)| o),
+                   Ok(Sampled(Some("4E23FC67"), "std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)")));
+        assert_eq!(massif_symbol("in 1 place, below massif's threshold (0.01%)").map(|(_, o)| o),
+                   Ok(Ignored(1, 0.01)));
+        assert_eq!(massif_symbol("in 5 places, below massif's threshold (0.01%)").map(|(_, o)| o),
+                   Ok(Ignored(5, 0.01)));
+        assert_eq!(massif_symbol("in 9570 places, all below massif's threshold (0.01%)\n").map(|(_, o)| o),
+                   Ok(Ignored(9570, 0.01)));
     }
 
     #[test]
-    fn it_parses_lines() {
+    fn it_parses_samples() {
         use Symbol::*;
-        assert_eq!(massif_line_tuple("n184: 94985897 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n").map(|(_, o)| o),
-                   Ok((184, 94985897, External("(heap allocation functions) malloc/new/new[], --alloc-fns, etc."))));
-        assert_eq!(massif_line_tuple("n4: 13847645 0x4E23FC67: std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)\n").map(|(_, o)| o),
-                   Ok((4, 13847645, Internal(("4E23FC67", "std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)")))));
-        assert_eq!(massif_line_tuple("n0: 109 in 1 place, below massif's threshold (0.01%)\n").map(|(_, o)| o),
-                   Ok((0, 109, Ignored((1, 0.01)))));
-        assert_eq!(massif_line_tuple("n0: 1355955 in 9570 places, all below massif's threshold (0.01%)\n").map(|(_, o)| o),
-                   Ok((0, 1355955, Ignored((9570, 0.01)))));
+        assert_eq!(massif_sample("n184: 94985897 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n").map(|(_, o)| o),
+                   Ok(Sample { nb_callers: 184, bytes: 94985897, symbol: Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.") }));
+        assert_eq!(massif_sample("n4: 13847645 0x4E23FC67: std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)\n").map(|(_, o)| o),
+                   Ok(Sample { nb_callers: 4, bytes: 13847645, symbol: Sampled(Some("4E23FC67"), "std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)") }));
+        assert_eq!(massif_sample("n0: 109 in 1 place, below massif's threshold (0.01%)\n").map(|(_, o)| o),
+                   Ok(Sample { nb_callers: 0, bytes: 109, symbol: Ignored(1, 0.01) }));
+        assert_eq!(massif_sample("n0: 1355955 in 9570 places, all below massif's threshold (0.01%)\n").map(|(_, o)| o),
+                   Ok(Sample { nb_callers: 0, bytes: 1355955, symbol: Ignored(9570, 0.01) }));
     }
 
     #[test]
-    fn it_works() {
+    fn it_parses_trees() {
         // note: this smoke test may not be 100% accurate
-        let tree = r#"
-        n2: 11592561 0x15266383: char* std::string::_S_construct<char const*>(char const*, char const*, std::allocator<char> const&, std::forward_iterator_tag) (in liblog4cxx.so)
-         n0: 11592452 0x4E241956: std::basic_string<char, std::char_traits<char>, std::allocator<char> >::basic_string(char const*, std::allocator<char> const&) (in libstdc++.so)
-         n0: 109 in 1 place, below massif's threshold (0.01%)
-        n0: 42 in 5 places, below massif's threshold (0.01%)
-         "#.trim_start().trim_end_matches(' ');
+        let tree = "\
+        n2: 11592561 0x15266383: char* std::string::_S_construct<char const*>(char const*, char const*, std::allocator<char> const&, std::forward_iterator_tag) (in liblog4cxx.so)\n\
+         n0: 11592452 0x4E241956: std::basic_string<char, std::char_traits<char>, std::allocator<char> >::basic_string(char const*, std::allocator<char> const&) (in libstdc++.so)\n\
+         n0: 109 in 1 place, below massif's threshold (0.01%)\n\
+        n0: 42 in 5 places, below massif's threshold (0.01%)\n\
+        ";
 
         use Location::*;
         let root1 = Allocation::new(11592561, Described("char* std::string::_S_construct<char const*>(char const*, char const*, std::allocator<char> const&, std::forward_iterator_tag) (in liblog4cxx.so)".to_string()));
@@ -225,11 +252,78 @@ mod tests {
 
         use Call::*;
         let reader = BufReader::new(tree.as_bytes());
-        let mut calls = massif_tree(reader).map(|result| result.map_err(|e| format!("{:?}", e)));
+        let mut calls = read_massif_tree(reader).map(|result| result.map_err(|e| format!("{:?}", e)));
         assert_eq!(calls.next(), Some(Ok((Inner("15266383".to_string()), None, root1))));
         assert_eq!(calls.next(), Some(Ok((Inner("4E241956".to_string()), Some(Inner("15266383".to_string())), child1))));
         assert_eq!(calls.next(), Some(Ok((Root, Some(Inner("15266383".to_string())), child2))));
         assert_eq!(calls.next(), Some(Ok((Root, None, root2))));
         assert_eq!(calls.next(), None);
+    }
+
+    #[test]
+    fn it_parses_attributes() {
+        assert_eq!(massif_attribute("time=0\n").map(|(_, o)| o), Ok(("time", "0")));
+        assert_eq!(massif_attribute("mem_heap_extra_B=0\n").map(|(_, o)| o), Ok(("mem_heap_extra_B", "0")));
+        assert_eq!(massif_attribute("mem_stacks_B=0\n").map(|(_, o)| o), Ok(("mem_stacks_B", "0")));
+    }
+
+    #[test]
+    #[ignore]
+    fn it_parses_many_attributes() {
+        let attributes = "\
+        time=0\n\
+        mem_heap_B=0\n\
+        mem_heap_extra_B=0\n\
+        mem_stacks_B=0\n\
+        heap_tree=detailed\n\
+        ";
+
+        let expected = {
+            let mut attributes = Attributes::new();
+            attributes.insert("time", "0");
+            attributes.insert("mem_heap_B", "0");
+            attributes.insert("mem_heap_extra_B", "0");
+            attributes.insert("mem_stacks_B", "0");
+            attributes.insert("heap_tree", "detailed");
+            attributes
+        };
+
+        assert_eq!(massif_attributes(attributes).map(|(_, o)| o), Ok(expected));
+    }
+
+    #[test]
+    #[ignore]
+    fn it_parses_snapshots() {
+        let snapshot = "\
+        #-----------\n\
+        snapshot=0\n\
+        #-----------\n\
+        time=0\n\
+        mem_heap_B=0\n\
+        mem_heap_extra_B=0\n\
+        mem_stacks_B=0\n\
+        heap_tree=detailed\n\
+        n0: 0 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n\
+        ";
+
+        let mut attributes = Attributes::new();
+        attributes.insert("time", "0");
+        attributes.insert("mem_heap_B", "0");
+        attributes.insert("mem_heap_extra_B", "0");
+        attributes.insert("mem_stacks_B", "0");
+        attributes.insert("heap_tree", "detailed");
+        let attributes = attributes;
+
+        let tree = Tree {
+            sample: Sample {
+                nb_callers: 0,
+                bytes: 0,
+                symbol: Symbol::Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.")
+            },
+            callers: vec![],
+        };
+
+        assert_eq!(massif_snapshot(snapshot).map(|(_, o)| o),
+                   Ok((0, attributes, tree)));
     }
 }
