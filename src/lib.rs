@@ -106,7 +106,7 @@ pub fn read_massif<R: BufRead>(reader: R) -> io::Result<(CallerTree, CallGraph)>
     let mut caller_tree_node_builder = CallerTreeBuilder::default();
     let mut call_graph = CallGraph::new();
 
-    for entry in parsing::massif_tree(reader) {
+    for entry in parsing::read_massif_tree(reader) {
         let (caller, callee, allocation) = entry?;
 
         let callee_id = {
