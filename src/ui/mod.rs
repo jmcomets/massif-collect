@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{self, Write};
 use std::panic;
+use std::path::Path;
 
 use tui::{
     Terminal,
@@ -44,9 +45,9 @@ macro_rules! io_error {
     }}
 }
 
-pub fn run(output: Option<&str>, caller_tree: &CallerTree, call_graph: &CallGraph) -> io::Result<()> {
-    let output: Box<dyn Write> = if let Some(filename) = output {
-        let file = File::create(filename)?;
+pub fn run<P: AsRef<Path>>(output: Option<P>, caller_tree: &CallerTree, call_graph: &CallGraph) -> io::Result<()> {
+    let output: Box<dyn Write> = if let Some(path) = output {
+        let file = File::create(path.as_ref())?;
         Box::new(file)
     } else {
         let stdout = io::stdout();
