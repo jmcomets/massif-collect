@@ -173,7 +173,6 @@ named!(positive_integer<&str, usize>, map_res!(digit1, usize::from_str));
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::BufReader;
 
     #[test]
     fn it_parses_ignored_calls() {
