@@ -93,6 +93,9 @@ fn split_symbol(symbol: Symbol) -> (Call, Location) {
     (call, location)
 }
 
+named!(massif_dump<&str, (Attributes, Vec<(SnapshotId, Attributes, Tree)>)>,
+       tuple!(massif_header, many0!(complete!(massif_snapshot))));
+
 named!(massif_header<&str, Attributes>,
        call!(massif_header_attributes));
 
@@ -101,7 +104,7 @@ named!(massif_header_attributes<&str, Attributes>,
 
 named!(massif_header_attribute<&str, (&str, &str)>,
        do_parse!(
-           key: take_until!(":")  >> tag!(": ")  >>
+           key: take_till!(|c| c == ':' || c == '\r' || c == '\n')  >> tag!(": ")  >>
            value: not_line_ending >> line_ending >>
            (key, value)));
 
@@ -138,7 +141,7 @@ named!(massif_snapshot_attributes<&str, Attributes>,
 
 named!(massif_snapshot_attribute<&str, (&str, &str)>,
        do_parse!(
-           key: take_until!("=")  >> char!('=')  >>
+           key: take_till!(|c| c == '=' || c == '\r' || c == '\n')  >> char!('=')  >>
            value: not_line_ending >> line_ending >>
            (key, value)));
 
@@ -351,5 +354,77 @@ mod tests {
         let attributes = attributes;
 
         assert_eq!(massif_header(header).map(|(_, o)| o), Ok(attributes));
+    }
+
+    #[test]
+    fn it_parses_dumps() {
+        let dump = "\
+                     desc: -x --option=42 arg1 arg2\n\
+                     cmd: the command-line\n\
+                     time_unit: ms\n\
+                     #-----------\n\
+                     snapshot=0\n\
+                     #-----------\n\
+                     time=0\n\
+                     heap_tree=detailed\n\
+                     n0: 0 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n\
+                     #-----------\n\
+                     snapshot=1\n\
+                     #-----------\n\
+                     time=0\n\
+                     heap_tree=detailed\n\
+                     n1: 21 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n\
+                      n0: 21 0x4E23FC67: allocate_some_memory() (in liberty.so)\n\
+                     ";
+
+        let header_attributes = {
+            let mut attributes = Attributes::new();
+            attributes.insert("desc", "-x --option=42 arg1 arg2");
+            attributes.insert("cmd", "the command-line");
+            attributes.insert("time_unit", "ms");
+            attributes
+        };
+
+        assert_eq!(massif_header(dump).map(|(_, o)| o), Ok(header_attributes.clone()));
+
+        let snapshot_attributes = {
+            let mut attributes = Attributes::new();
+            attributes.insert("heap_tree", "detailed");
+            attributes.insert("time", "0");
+            attributes
+        };
+
+        let snapshot0_tree = Tree {
+            sample: Sample {
+                nb_callers: 0,
+                bytes: 0,
+                symbol: Symbol::Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.")
+            },
+            callers: vec![],
+        };
+
+        let snapshot0 = (0, snapshot_attributes.clone(), snapshot0_tree);
+
+        let snapshot1_tree = Tree {
+            sample: Sample {
+                nb_callers: 1,
+                bytes: 21,
+                symbol: Symbol::Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc."),
+            },
+            callers: vec![
+                Tree {
+                    sample: Sample {
+                        nb_callers: 0,
+                        bytes: 21,
+                        symbol: Symbol::Sampled(Some("4E23FC67"), "allocate_some_memory() (in liberty.so)"),
+                    },
+                    callers: vec![],
+                }
+            ],
+        };
+
+        let snapshot1 = (1, snapshot_attributes, snapshot1_tree);
+
+        assert_eq!(massif_dump(dump).map(|(_, o)| o), Ok((header_attributes, vec![snapshot0, snapshot1])));
     }
 }
