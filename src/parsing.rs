@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::error;
+use std::fmt;
 use std::io::{self, BufRead};
 use std::iter::FromIterator;
 use std::str::FromStr;
@@ -166,7 +168,7 @@ pub struct Sample<'a> {
 
 #[derive(Debug, PartialEq)]
 pub enum Symbol<'a> {
-    Sampled(Option<&'a str>, &'a str),
+    Sampled(Option<usize>, &'a str),
     Ignored(usize, f32),
 }
 
@@ -200,14 +202,81 @@ named!(massif_ignored_call<&str, (usize, f32)>,
            tag!("%)")                          >>
            (nb_places, threshold)));
 
-named!(massif_sampled_call<&str, (Option<&str>, &str)>,
+named!(massif_sampled_call<&str, (Option<usize>, &str)>,
        do_parse!(
            address: opt!(terminated!(hex_address, char!(':'))) >> space0 >>
            description: not_line_ending                                  >>
            (address, description)));
 
-named!(hex_address<&str, &str>,
-       preceded!(tag!("0x"), hex_digit1));
+named!(hex_address<&str, usize>,
+       map_res!(preceded!(tag!("0x"), hex_digit1),
+                decode_hex_address));
+
+/// The error type for decoding a hex string.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HexDecodeError {
+    /// An invalid character was found. Valid ones are: `0...9`, `a...f`
+    /// or `A...F`.
+    InvalidHexCharacter { c: char, index: usize },
+
+    /// The hex string's length was larger than the maximum number of bytes expected.
+    InvalidStringLength,
+}
+
+impl error::Error for HexDecodeError {
+    fn description(&self) -> &str {
+        match *self {
+            Self::InvalidHexCharacter { .. } => "invalid character",
+            Self::InvalidStringLength        => "invalid string length",
+        }
+    }
+}
+
+impl fmt::Display for HexDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Self::InvalidHexCharacter { c, index } => {
+                write!(f, "Invalid character '{}' at position {}", c, index)
+            }
+            Self::InvalidStringLength => write!(f, "Invalid string length"),
+        }
+    }
+}
+
+fn decode_hex_address(data: &str) -> Result<usize, HexDecodeError> {
+    let mut bytes = [0u8; 8];
+
+    if data.len() / 2 > bytes.len() {
+        return Err(HexDecodeError::InvalidStringLength);
+    }
+
+    fn val(c: char, index: usize) -> Result<u8, HexDecodeError> {
+        if !c.is_ascii() {
+            return Err(HexDecodeError::InvalidHexCharacter { c, index });
+        }
+
+        let b = c as u8;
+        match b {
+            b'A'..=b'F' => Ok(b - b'A' + 10),
+            b'a'..=b'f' => Ok(b - b'a' + 10),
+            b'0'..=b'9' => Ok(b - b'0'),
+            _ => Err(HexDecodeError::InvalidHexCharacter { c, index }),
+        }
+    }
+
+    let pairs = data.chars().rev().step_by(2).zip(data.chars().rev().skip(1).step_by(2));
+
+    for (i, (lo, hi)) in pairs.enumerate() {
+        bytes[i] = val(hi, 2 * i + 1)? << 4 | val(lo, 2 * i)?;
+    }
+
+    if data.len() % 2 != 0 {
+        let c = data.chars().next().unwrap();
+        bytes[data.len()/2] = val(c, data.len())?;
+    }
+
+    Ok(usize::from_le_bytes(bytes))
+}
 
 named!(positive_integer<&str, usize>, map_res!(digit1, usize::from_str));
 
@@ -227,7 +296,7 @@ mod tests {
         assert_eq!(massif_symbol("(heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n").map(|(_, o)| o),
                    Ok(Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.")));
         assert_eq!(massif_symbol("0x4E23FC67: std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)\n").map(|(_, o)| o),
-                   Ok(Sampled(Some("4E23FC67"), "std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)")));
+                   Ok(Sampled(Some(0x4E23FC67), "std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)")));
         assert_eq!(massif_symbol("in 1 place, below massif's threshold (0.01%)").map(|(_, o)| o),
                    Ok(Ignored(1, 0.01)));
         assert_eq!(massif_symbol("in 5 places, below massif's threshold (0.01%)").map(|(_, o)| o),
@@ -242,7 +311,7 @@ mod tests {
         assert_eq!(massif_sample("n184: 94985897 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n").map(|(_, o)| o),
                    Ok(Sample { nb_callers: 184, bytes: 94985897, symbol: Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.") }));
         assert_eq!(massif_sample("n4: 13847645 0x4E23FC67: std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)\n").map(|(_, o)| o),
-                   Ok(Sample { nb_callers: 4, bytes: 13847645, symbol: Sampled(Some("4E23FC67"), "std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)") }));
+                   Ok(Sample { nb_callers: 4, bytes: 13847645, symbol: Sampled(Some(0x4E23FC67), "std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)") }));
         assert_eq!(massif_sample("n0: 109 in 1 place, below massif's threshold (0.01%)\n").map(|(_, o)| o),
                    Ok(Sample { nb_callers: 0, bytes: 109, symbol: Ignored(1, 0.01) }));
         assert_eq!(massif_sample("n0: 1355955 in 9570 places, all below massif's threshold (0.01%)\n").map(|(_, o)| o),
@@ -268,9 +337,9 @@ mod tests {
         use Call::*;
         let reader = BufReader::new(tree.as_bytes());
         let mut calls = read_massif_tree(reader).map(|result| result.map_err(|e| format!("{:?}", e)));
-        assert_eq!(calls.next(), Some(Ok((Inner("15266383".to_string()), None, root1))));
-        assert_eq!(calls.next(), Some(Ok((Inner("4E241956".to_string()), Some(Inner("15266383".to_string())), child1))));
-        assert_eq!(calls.next(), Some(Ok((Root, Some(Inner("15266383".to_string())), child2))));
+        assert_eq!(calls.next(), Some(Ok((Inner(format!("{}", 0x15266383)), None, root1))));
+        assert_eq!(calls.next(), Some(Ok((Inner(format!("{}", 0x4E241956)), Some(Inner(format!("{}", 0x15266383))), child1))));
+        assert_eq!(calls.next(), Some(Ok((Root, Some(Inner(format!("{}", 0x15266383))), child2))));
         assert_eq!(calls.next(), Some(Ok((Root, None, root2))));
         assert_eq!(calls.next(), None);
     }
@@ -416,7 +485,7 @@ mod tests {
                     sample: Sample {
                         nb_callers: 0,
                         bytes: 21,
-                        symbol: Symbol::Sampled(Some("4E23FC67"), "allocate_some_memory() (in liberty.so)"),
+                        symbol: Symbol::Sampled(Some(0x4E23FC67), "allocate_some_memory() (in liberty.so)"),
                     },
                     callers: vec![],
                 }
@@ -426,5 +495,14 @@ mod tests {
         let snapshot1 = (1, snapshot_attributes, snapshot1_tree);
 
         assert_eq!(massif_dump(dump).map(|(_, o)| o), Ok((header_attributes, vec![snapshot0, snapshot1])));
+    }
+
+    #[test]
+    fn it_decodes_hex_addresses() {
+        assert_eq!(decode_hex_address("12"), Ok(0x12));
+        assert_eq!(decode_hex_address("1234"), Ok(0x1234));
+        assert_eq!(decode_hex_address("1"), Ok(0x1));
+        assert_eq!(decode_hex_address("123"), Ok(0x123));
+        assert_eq!(decode_hex_address("15266383"), Ok(0x15266383));
     }
 }
