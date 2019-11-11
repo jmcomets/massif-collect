@@ -75,6 +75,8 @@ impl<'a> Iterator for CallerTreeWalker<'a> {
                 let ref caller = caller_tree.sample.call;
                 self.stack.push((&caller_tree.sample, &caller_tree.callers));
                 return Some((callee, caller, bytes));
+            } else {
+                self.stack.pop();
             }
         }
 
