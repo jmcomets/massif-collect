@@ -6,7 +6,7 @@ use std::path::Path;
 use tui::{
     Terminal,
     backend::{TermionBackend},
-    widgets::Widget,
+    // widgets::Widget,
 };
 
 use termion::{
@@ -17,26 +17,30 @@ use termion::{
 };
 
 use crate::{
-    CallGraph,
-    CallerTree,
+    Snapshot,
+    graph::build_call_graph,
 };
 
-mod controllers;
 mod events;
-mod input;
-mod views;
+
+// mod input;
+// mod controllers;
+// mod views;
 
 use self::{
-    controllers::{
-        CallGraphController,
-        CallerTreeController,
-    },
+    // controllers::{
+    //     CallGraphController,
+    //     CallerTreeController,
+    // },
     events::{Events, Event},
-    input::InputHandler,
-    views::{CallerTreeWidget, CallGraphWidget},
+    // input::InputHandler,
+    // views::{CallerTreeWidget, CallGraphWidget},
 };
 
-pub fn run<P: AsRef<Path>>(output: Option<P>, caller_tree: &CallerTree, call_graph: &CallGraph) -> io::Result<()> {
+pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Result<()> {
+    let ref caller_tree = snapshots[0].tree;
+    let call_graph = build_call_graph(caller_tree);
+
     let output: Box<dyn Write> = if let Some(path) = output {
         let file = File::create(path.as_ref())?;
         Box::new(file)
@@ -56,25 +60,32 @@ pub fn run<P: AsRef<Path>>(output: Option<P>, caller_tree: &CallerTree, call_gra
 
     let events = Events::new();
 
-    let mut caller_tree = CallerTreeController::new(&caller_tree);
-    let mut call_graph = CallGraphController::new(&call_graph);
+    // let mut caller_tree = CallerTreeController::new(&caller_tree);
+    // let mut call_graph = CallGraphController::new(&call_graph);
 
     let mut tab_index = 0;
 
     loop {
         terminal.draw(|mut f| {
-            let size = f.size();
+            // let size = f.size();
             if tab_index == 0 {
-                CallerTreeWidget::new(&caller_tree).render(&mut f, size);
+                // CallerTreeWidget::new(&caller_tree).render(&mut f, size);
             } else {
-                CallGraphWidget::new(&call_graph).render(&mut f, size);
+                // CallGraphWidget::new(&call_graph).render(&mut f, size);
             }
         })?;
 
         // since output is buffered, flush to see the effect immediately when hitting backspace
         io::stdout().flush().ok();
 
-        match events.next().map_err(io_error!("handling events"))? {
+        macro_rules! io_error {
+            ($tag:expr, $e:expr) => {{
+                let message = format!("{}: {:?}", $tag, $e);
+                ::std::io::Error::new(::std::io::ErrorKind::Other, message)
+            }}
+        }
+
+        match events.next().map_err(|e| io_error!("handling events", e))? {
                 Event::Input(input) => {
                     let size = terminal.size().unwrap();
                     match input {
@@ -82,9 +93,9 @@ pub fn run<P: AsRef<Path>>(output: Option<P>, caller_tree: &CallerTree, call_gra
                         Key::Char('\t') => { tab_index = (tab_index + 1) % 2 }
                         input @ _       => {
                             if tab_index == 0 {
-                                caller_tree.handle_input(size, &input);
+                                // caller_tree.handle_input(size, &input);
                             } else {
-                                call_graph.handle_input(size, &input);
+                                // call_graph.handle_input(size, &input);
                             }
                         }
                     }
@@ -110,13 +121,4 @@ fn set_termion_panic_hook() {
 
         eprintln!("{}thread '<unnamed>' panicked at '{}', {}\r", ToMainScreen, msg, location);
     }));
-}
-
-macro_rules! io_error {
-    ($tag:expr) => {{
-        |e| {
-            let message = format!("{}: {:?}", $tag, e);
-            ::std::io::Error::new(::std::io::ErrorKind::Other, message)
-        }
-    }}
 }

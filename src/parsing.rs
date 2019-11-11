@@ -1,13 +1,12 @@
 use std::error;
 use std::fmt;
-use std::io::{self, BufRead};
 use std::iter::FromIterator;
 use std::str::FromStr;
 
 use nom::character::streaming::{space0, space1, digit1, hex_digit1, line_ending, not_line_ending};
 use nom::number::streaming::float;
 
-use crate::{Call, Sample, Address, CallerTree, Attributes, Snapshot, SnapshotId};
+use crate::{Call, Sample, CallerTree, Attributes, Snapshot, SnapshotId};
 
 named!(pub massif<&str, (Attributes, Vec<Snapshot>)>,
        tuple!(massif_header, many0!(complete!(massif_snapshot))));

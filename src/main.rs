@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::io::{self, Read, BufRead, BufReader};
 
-use massif_collect::{parsing, graph};
+use massif_collect::{parsing, ui};
 
 use clap::{App, Arg};
 
@@ -34,7 +34,7 @@ fn app() -> App<'static, 'static> {
 fn main() -> io::Result<()> {
     let matches = app().get_matches();
     let filename = matches.value_of("out").unwrap_or("data/example.out");
-    // let ui_stdout = matches.value_of("tui-stdout");
+    let ui_stdout = matches.value_of("tui-stdout");
 
     eprint!("Reading file into memory ... ");
     let file = File::open(filename)?;
@@ -44,11 +44,11 @@ fn main() -> io::Result<()> {
     eprintln!("done");
 
     eprint!("Parsing ... ");
-    let (_, snapshots) = parsing::massif(&input)
+    let (_, (_, snapshots)) = parsing::massif(&input)
         .map_err(io_error!("reading massif output"))?;
     eprintln!("done");
 
-    Ok(())
+    ui::run(ui_stdout, &snapshots[..])?;
 
-    // ui::run(ui_stdout, &caller_tree, &call_graph)?;
+    Ok(())
 }

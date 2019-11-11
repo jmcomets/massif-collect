@@ -1,12 +1,9 @@
-#![allow(dead_code, unused_imports, unused_variables, unused_macros)] // FIXME remove this
-
 use std::collections::HashMap;
-use std::io::{self, BufRead};
 
 #[macro_use]
 extern crate nom;
 
-//pub mod ui;
+pub mod ui;
 
 pub mod graph;
 pub mod parsing;
