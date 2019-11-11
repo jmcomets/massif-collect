@@ -93,12 +93,24 @@ fn split_symbol(symbol: Symbol) -> (Call, Location) {
     (call, location)
 }
 
+named!(massif_header<&str, Attributes>,
+       call!(massif_header_attributes));
+
+named!(massif_header_attributes<&str, Attributes>,
+       map!(many0!(complete!(massif_header_attribute)), Attributes::from_iter));
+
+named!(massif_header_attribute<&str, (&str, &str)>,
+       do_parse!(
+           key: take_until!(":")  >> tag!(": ")  >>
+           value: not_line_ending >> line_ending >>
+           (key, value)));
+
 named!(massif_snapshot<&str, (SnapshotId, Attributes, Tree)>,
        do_parse!(
-           snapshot: snapshot_id >>
-           attributes: massif_attributes >>
+           id: snapshot_id >>
+           attributes: massif_snapshot_attributes >>
            tree: massif_tree >>
-           (snapshot, attributes, tree)));
+           (id, attributes, tree)));
 
 #[allow(dead_code)]
 type SnapshotId = usize;
@@ -121,12 +133,12 @@ named!(snapshot_attribute<&str, &str>,
 #[allow(dead_code)]
 type Attributes<'a> = HashMap<&'a str, &'a str>;
 
-named!(massif_attributes<&str, Attributes>,
-       map!(many0!(complete!(massif_attribute)), Attributes::from_iter));
+named!(massif_snapshot_attributes<&str, Attributes>,
+       map!(many0!(complete!(massif_snapshot_attribute)), Attributes::from_iter));
 
-named!(massif_attribute<&str, (&str, &str)>,
+named!(massif_snapshot_attribute<&str, (&str, &str)>,
        do_parse!(
-           key: take_until1!("=") >> char!('=')  >>
+           key: take_until!("=")  >> char!('=')  >>
            value: not_line_ending >> line_ending >>
            (key, value)));
 
@@ -261,14 +273,14 @@ mod tests {
     }
 
     #[test]
-    fn it_parses_attributes() {
-        assert_eq!(massif_attribute("time=0\n").map(|(_, o)| o), Ok(("time", "0")));
-        assert_eq!(massif_attribute("mem_heap_extra_B=0\n").map(|(_, o)| o), Ok(("mem_heap_extra_B", "0")));
-        assert_eq!(massif_attribute("mem_stacks_B=0\n").map(|(_, o)| o), Ok(("mem_stacks_B", "0")));
+    fn it_parses_snapshot_attributes() {
+        assert_eq!(massif_snapshot_attribute("time=0\n").map(|(_, o)| o), Ok(("time", "0")));
+        assert_eq!(massif_snapshot_attribute("mem_heap_extra_B=0\n").map(|(_, o)| o), Ok(("mem_heap_extra_B", "0")));
+        assert_eq!(massif_snapshot_attribute("mem_stacks_B=0\n").map(|(_, o)| o), Ok(("mem_stacks_B", "0")));
     }
 
     #[test]
-    fn it_parses_many_attributes() {
+    fn it_parses_many_snapshot_attributes() {
         let attributes = "time=0\n\
                           mem_heap_B=0\n\
                           mem_heap_extra_B=0\n\
@@ -286,7 +298,7 @@ mod tests {
             attributes
         };
 
-        assert_eq!(massif_attributes(attributes), Ok(("", expected)));
+        assert_eq!(massif_snapshot_attributes(attributes).map(|(_, o)| o), Ok(expected));
     }
 
     #[test]
@@ -322,5 +334,22 @@ mod tests {
 
         assert_eq!(massif_snapshot(snapshot).map(|(_, o)| o),
                    Ok((0, attributes, tree)));
+    }
+
+    #[test]
+    fn it_parses_header_attributes() {
+        let header = "\
+                     desc: -x --option=42 arg1 arg2\n\
+                     cmd: the command-line\n\
+                     time_unit: ms\n\
+                     ";
+
+        let mut attributes = Attributes::new();
+        attributes.insert("desc", "-x --option=42 arg1 arg2");
+        attributes.insert("cmd", "the command-line");
+        attributes.insert("time_unit", "ms");
+        let attributes = attributes;
+
+        assert_eq!(massif_header(header).map(|(_, o)| o), Ok(attributes));
     }
 }
