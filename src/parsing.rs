@@ -122,11 +122,11 @@ named!(snapshot_attribute<&str, &str>,
 type Attributes<'a> = HashMap<&'a str, &'a str>;
 
 named!(massif_attributes<&str, Attributes>,
-       map!(many0!(massif_attribute), Attributes::from_iter));
+       map!(many0!(complete!(massif_attribute)), Attributes::from_iter));
 
 named!(massif_attribute<&str, (&str, &str)>,
        do_parse!(
-           key: take_until!("=")  >> char!('=')  >>
+           key: take_until1!("=") >> char!('=')  >>
            value: not_line_ending >> line_ending >>
            (key, value)));
 
@@ -268,15 +268,13 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn it_parses_many_attributes() {
-        let attributes = "\
-        time=0\n\
-        mem_heap_B=0\n\
-        mem_heap_extra_B=0\n\
-        mem_stacks_B=0\n\
-        heap_tree=detailed\n\
-        ";
+        let attributes = "time=0\n\
+                          mem_heap_B=0\n\
+                          mem_heap_extra_B=0\n\
+                          mem_stacks_B=0\n\
+                          heap_tree=detailed\n\
+                          ";
 
         let expected = {
             let mut attributes = Attributes::new();
@@ -288,11 +286,10 @@ mod tests {
             attributes
         };
 
-        assert_eq!(massif_attributes(attributes).map(|(_, o)| o), Ok(expected));
+        assert_eq!(massif_attributes(attributes), Ok(("", expected)));
     }
 
     #[test]
-    #[ignore]
     fn it_parses_snapshots() {
         let snapshot = "\
         #-----------\n\
