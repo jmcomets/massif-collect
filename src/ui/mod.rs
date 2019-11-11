@@ -64,10 +64,11 @@ pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Res
     // let mut call_graph = CallGraphController::new(&call_graph);
 
     let mut tab_index = 0;
+    let nb_tabs = 2;
 
     loop {
         terminal.draw(|mut f| {
-            // let size = f.size();
+            let size = f.size();
             if tab_index == 0 {
                 // CallerTreeWidget::new(&caller_tree).render(&mut f, size);
             } else {
@@ -90,7 +91,7 @@ pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Res
                     let size = terminal.size().unwrap();
                     match input {
                         Key::Char('q') => { break; }
-                        Key::Char('\t') => { tab_index = (tab_index + 1) % 2 }
+                        Key::Char('\t') => { tab_index = (tab_index + 1) % nb_tabs }
                         input @ _       => {
                             if tab_index == 0 {
                                 // caller_tree.handle_input(size, &input);
