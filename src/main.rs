@@ -1,9 +1,20 @@
-use std::fs::File;
-use std::io::{self, BufReader};
+#![allow(dead_code, unused_imports, unused_variables)] // FIXME remove this
 
-use massif_collect::{read_massif, ui};
+use std::fs::File;
+use std::io::{self, Read, BufRead, BufReader};
+
+use massif_collect::{parsing, graph};
 
 use clap::{App, Arg};
+
+macro_rules! io_error {
+    ($tag:expr) => {{
+        |e| {
+            let message = format!("{}: {:?}", $tag, e);
+            ::std::io::Error::new(::std::io::ErrorKind::Other, message)
+        }
+    }}
+}
 
 fn app() -> App<'static, 'static> {
     App::new("massif-collect")
@@ -15,21 +26,29 @@ fn app() -> App<'static, 'static> {
              .value_name("TTY")
              .help("Set the text user-interface's standard output.")
              .takes_value(true))
-        .arg(Arg::with_name("snapshot")
-             .help("Sets the input snapshot to view")
+        .arg(Arg::with_name("out")
+             .help("Massif output file to view")
              .index(1))
 }
 
 fn main() -> io::Result<()> {
     let matches = app().get_matches();
-    let filename = matches.value_of("snapshot").unwrap_or("data/example.out");
-    let ui_stdout = matches.value_of("tui-stdout");
+    let filename = matches.value_of("out").unwrap_or("data/example.out");
+    // let ui_stdout = matches.value_of("tui-stdout");
 
+    eprint!("Reading file into memory ... ");
     let file = File::open(filename)?;
-    let reader = BufReader::new(file);
-    let (caller_tree, call_graph) = read_massif(reader)?;
+    let mut reader = BufReader::new(file);
+    let mut input = String::new();
+    reader.read_to_string(&mut input)?;
+    eprintln!("done");
 
-    ui::run(ui_stdout, &caller_tree, &call_graph)?;
+    eprint!("Parsing ... ");
+    let (_, snapshots) = parsing::massif(&input)
+        .map_err(io_error!("reading massif output"))?;
+    eprintln!("done");
 
     Ok(())
+
+    // ui::run(ui_stdout, &caller_tree, &call_graph)?;
 }

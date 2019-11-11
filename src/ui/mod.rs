@@ -36,15 +36,6 @@ use self::{
     views::{CallerTreeWidget, CallGraphWidget},
 };
 
-macro_rules! io_error {
-    ($tag:expr) => {{
-        |e| {
-            let message = format!("{}: {:?}", $tag, e);
-            io::Error::new(io::ErrorKind::Other, message)
-        }
-    }}
-}
-
 pub fn run<P: AsRef<Path>>(output: Option<P>, caller_tree: &CallerTree, call_graph: &CallGraph) -> io::Result<()> {
     let output: Box<dyn Write> = if let Some(path) = output {
         let file = File::create(path.as_ref())?;
@@ -119,4 +110,13 @@ fn set_termion_panic_hook() {
 
         eprintln!("{}thread '<unnamed>' panicked at '{}', {}\r", ToMainScreen, msg, location);
     }));
+}
+
+macro_rules! io_error {
+    ($tag:expr) => {{
+        |e| {
+            let message = format!("{}: {:?}", $tag, e);
+            ::std::io::Error::new(::std::io::ErrorKind::Other, message)
+        }
+    }}
 }

@@ -1,11 +1,33 @@
 use std::collections::HashMap;
 
-use crate::{Address, Call, CallId};
+use petgraph::graphmap::DiGraphMap;
+
+use crate::{Address, Call, CallerTree};
+
+pub type CallId = usize;
+
+pub type CallGraph = DiGraphMap<CallId, Vec<usize>>;
+
+pub fn build_call_graph(caller_tree: &CallerTree) -> CallGraph {
+    let mut call_index = CallIndex::new();
+    let mut call_graph = CallGraph::new();
+
+    for (callee, caller, bytes) in caller_tree.walk() {
+        let callee_id = call_index.index(callee);
+        let caller_id = call_index.index(caller);
+
+        call_graph.edge_entry(caller_id, callee_id)
+            .or_insert(vec![])
+            .push(bytes);
+     }
+
+    call_graph
+}
 
 #[derive(Debug, Eq, PartialEq, Hash)]
 enum CallIndexKey {
     Root,
-    Inner(Address),
+    Node(Address),
     Leaf,
 }
 
@@ -13,8 +35,8 @@ impl<'a> From<&'a Call> for CallIndexKey {
     fn from(call: &'a Call) -> Self {
         match call {
             Call::Sampled(None, _)          => Self::Leaf,
-            Call::Sampled(Some(address), _) => Self::Inner(*address),
-            Call::Ignored(_, _)             => Self::Root,
+            Call::Sampled(Some(address), _) => Self::Node(*address),
+            Call::Ignored(_, _)             => Self::Root, // TODO maybe assign different ids to each ignored sample?
         }
     }
 }

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::error;
 use std::fmt;
 use std::io::{self, BufRead};
@@ -8,95 +7,12 @@ use std::str::FromStr;
 use nom::character::streaming::{space0, space1, digit1, hex_digit1, line_ending, not_line_ending};
 use nom::number::streaming::float;
 
-use crate::{Call, Allocation, Location};
+use crate::{Call, Sample, Address, CallerTree, Attributes, Snapshot, SnapshotId};
 
-pub fn read_massif_tree<R: BufRead>(reader: R) -> Iter<R> {
-    Iter {
-        reader,
-        lineno: 0,
-        line: String::new(),
-        calls: Vec::new(),
-    }
-}
-
-pub struct Iter<R> {
-    reader: R,
-    lineno: usize,
-    line: String,
-    calls: Vec<(Call, usize)>,
-}
-
-macro_rules! try_iter {
-    ($x:expr) => {
-        match $x {
-            Ok(x)  => { x }
-            Err(e) => { return Some(Err(e)); }
-        }
-    }
-}
-
-impl<R: BufRead> Iterator for Iter<R> {
-    type Item = io::Result<(Call, Option<Call>, Allocation)>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if try_iter!(self.reader.read_line(&mut self.line)) == 0 {
-            return None;
-        }
-
-        self.lineno += 1;
-        let parsed_line = try_iter!(massif_sample(&self.line)
-            .map(|(_, parsed)| parsed)
-            .map_err(|e| {
-                io::Error::new(io::ErrorKind::Other,
-                               format!("Failed to parse line {}: {:?}", self.lineno, e))
-            }));
-
-        let callee;
-        loop {
-            if let Some((_, ref mut nb_callers)) = self.calls.last_mut() {
-                if *nb_callers == 0 {
-                    self.calls.pop();
-                    continue;
-                }
-
-                *nb_callers -= 1;
-            }
-
-            callee = self.calls.last();
-            break;
-        }
-
-        let callee = callee.map(|(c, _)| c.clone());
-
-        let (caller, location) = split_symbol(parsed_line.symbol);
-
-        let allocation = Allocation::new(parsed_line.bytes, location);
-
-        self.calls.push((caller.clone(), parsed_line.nb_callers));
-        self.line.clear();
-
-        Some(Ok((caller, callee, allocation)))
-    }
-}
-
-fn split_symbol(symbol: Symbol) -> (Call, Location) {
-    let call = match symbol {
-        Symbol::Sampled(Some(address), _) => Call::Inner(address.to_string()),
-        Symbol::Sampled(None, _)          => Call::Leaf,
-        Symbol::Ignored(_, _)          => Call::Root,
-    };
-
-    use Location::*;
-    let location = match symbol {
-        Symbol::Sampled(_, description)        => Described(description.to_string()),
-        Symbol::Ignored(count, threshold) => Omitted((count, threshold)),
-    };
-
-    (call, location)
-}
-
-named!(massif_dump<&str, (Attributes, Vec<(SnapshotId, Attributes, Tree)>)>,
+named!(pub massif<&str, (Attributes, Vec<Snapshot>)>,
        tuple!(massif_header, many0!(complete!(massif_snapshot))));
+
+// ========== HEADER ==========
 
 named!(massif_header<&str, Attributes>,
        call!(massif_header_attributes));
@@ -104,92 +20,76 @@ named!(massif_header<&str, Attributes>,
 named!(massif_header_attributes<&str, Attributes>,
        map!(many0!(complete!(massif_header_attribute)), Attributes::from_iter));
 
-named!(massif_header_attribute<&str, (&str, &str)>,
+named!(massif_header_attribute<&str, (String, String)>,
        do_parse!(
-           key: take_till!(|c| c == ':' || c == '\r' || c == '\n')  >> tag!(": ")  >>
+           key: take_till!(|c| c == ':' || c == '\r' || c == '\n')  >> tag!(": ") >>
            value: not_line_ending >> line_ending >>
-           (key, value)));
+           (key.to_string(), value.to_string())));
 
-named!(massif_snapshot<&str, (SnapshotId, Attributes, Tree)>,
+// ========== SNAPSHOT ==========
+
+named!(massif_snapshot<&str, Snapshot>,
        do_parse!(
-           id: snapshot_id >>
+           id: massif_snapshot_id                 >>
            attributes: massif_snapshot_attributes >>
-           tree: massif_tree >>
-           (id, attributes, tree)));
+           tree: massif_tree                      >>
+           (Snapshot { id, attributes, tree })));
 
-#[allow(dead_code)]
-type SnapshotId = usize;
+named!(massif_snapshot_id<&str, SnapshotId>,
+       delimited!(massif_snapshot_separator,
+           map_res!(massif_snapshot_id_attribute, FromStr::from_str),
+           massif_snapshot_separator));
 
-named!(snapshot_id<&str, SnapshotId>,
-       delimited!(snapshot_separator,
-           map_res!(snapshot_attribute, FromStr::from_str),
-           snapshot_separator));
-
-named!(snapshot_separator<&str, ()>,
+named!(massif_snapshot_separator<&str, ()>,
        do_parse!(space0 >> char!('#') >> many1!(char!('-')) >> line_ending >> (())));
 
-// TODO factorize this parser with the `attribute` parser
-named!(snapshot_attribute<&str, &str>,
+named!(massif_snapshot_id_attribute<&str, &str>,
     do_parse!(
         tag!("snapshot") >> char!('=')  >>
         value: digit1    >> line_ending >>
         (value)));
 
-#[allow(dead_code)]
-type Attributes<'a> = HashMap<&'a str, &'a str>;
-
 named!(massif_snapshot_attributes<&str, Attributes>,
        map!(many0!(complete!(massif_snapshot_attribute)), Attributes::from_iter));
 
-named!(massif_snapshot_attribute<&str, (&str, &str)>,
+named!(massif_snapshot_attribute<&str, (String, String)>,
        do_parse!(
-           key: take_till!(|c| c == '=' || c == '\r' || c == '\n')  >> char!('=')  >>
+           key: take_till!(|c| c == '=' || c == '\r' || c == '\n')  >> char!('=') >>
            value: not_line_ending >> line_ending >>
-           (key, value)));
+           (key.to_string(), value.to_string())));
 
-#[derive(Debug, PartialEq)]
-struct Tree<'a> {
-    sample: Sample<'a>,
-    callers: Vec<Tree<'a>>,
-}
+// ========== TREE & SAMPLES ==========
 
-named!(massif_tree<&str, Tree>,
+named!(pub massif_tree<&str, CallerTree>,
        do_parse!(
-           sample: massif_sample                                   >>
-           callers: many_m_n!(0, sample.nb_callers, massif_tree) >>
-           (Tree { sample, callers })));
+           sample: massif_sample                        >>
+           callers: many_m_n!(0, sample.1, massif_tree) >>
+           (CallerTree { sample: sample.0, callers })));
 
-#[derive(Debug, PartialEq)]
-pub struct Sample<'a> {
-    nb_callers: usize,
-    bytes: usize,
-    symbol: Symbol<'a>,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Symbol<'a> {
-    Sampled(Option<usize>, &'a str),
-    Ignored(usize, f32),
-}
-
-named!(massif_sample<&str, Sample>,
+named!(massif_sample<&str, (Sample, usize)>,
        do_parse!(
            space0                                                           >>
            nb_callers: delimited!(char!('n'), positive_integer, char!(':')) >>
            space1                                                           >>
            bytes: positive_integer                                          >>
            space1                                                           >>
-           symbol: massif_symbol                                            >>
+           call: massif_call                                                >>
            space0                                                           >>
            line_ending                                                      >>
-           (Sample { nb_callers, bytes, symbol })));
+           (Sample { bytes, call }, nb_callers)));
 
-named!(massif_symbol<&str, Symbol>,
+named!(massif_call<&str, Call>,
        alt!(map!(massif_ignored_call,
-                |(count, threshold)| Symbol::Ignored(count, threshold))
+                |(count, threshold)| Call::Ignored(count, threshold))
             |
             map!(massif_sampled_call,
-                |(address, description)| Symbol::Sampled(address, description))));
+                |(address, description)| Call::Sampled(address, description.to_string()))));
+
+named!(massif_sampled_call<&str, (Option<usize>, &str)>,
+       do_parse!(
+           address: opt!(terminated!(hex_address, char!(':'))) >> space0 >>
+           description: not_line_ending                                  >>
+           (address, description)));
 
 named!(massif_ignored_call<&str, (usize, f32)>,
        do_parse!(
@@ -202,46 +102,11 @@ named!(massif_ignored_call<&str, (usize, f32)>,
            tag!("%)")                          >>
            (nb_places, threshold)));
 
-named!(massif_sampled_call<&str, (Option<usize>, &str)>,
-       do_parse!(
-           address: opt!(terminated!(hex_address, char!(':'))) >> space0 >>
-           description: not_line_ending                                  >>
-           (address, description)));
+// ========== MISC ==========
 
 named!(hex_address<&str, usize>,
        map_res!(preceded!(tag!("0x"), hex_digit1),
                 decode_hex_address));
-
-/// The error type for decoding a hex string.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum HexDecodeError {
-    /// An invalid character was found. Valid ones are: `0...9`, `a...f`
-    /// or `A...F`.
-    InvalidHexCharacter { c: char, index: usize },
-
-    /// The hex string's length was larger than the maximum number of bytes expected.
-    InvalidStringLength,
-}
-
-impl error::Error for HexDecodeError {
-    fn description(&self) -> &str {
-        match *self {
-            Self::InvalidHexCharacter { .. } => "invalid character",
-            Self::InvalidStringLength        => "invalid string length",
-        }
-    }
-}
-
-impl fmt::Display for HexDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Self::InvalidHexCharacter { c, index } => {
-                write!(f, "Invalid character '{}' at position {}", c, index)
-            }
-            Self::InvalidStringLength => write!(f, "Invalid string length"),
-        }
-    }
-}
 
 fn decode_hex_address(data: &str) -> Result<usize, HexDecodeError> {
     let mut bytes = [0u8; 8];
@@ -278,6 +143,32 @@ fn decode_hex_address(data: &str) -> Result<usize, HexDecodeError> {
     Ok(usize::from_le_bytes(bytes))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum HexDecodeError {
+    InvalidHexCharacter { c: char, index: usize },
+    InvalidStringLength,
+}
+
+impl error::Error for HexDecodeError {
+    fn description(&self) -> &str {
+        match *self {
+            Self::InvalidHexCharacter { .. } => "invalid character",
+            Self::InvalidStringLength        => "invalid string length",
+        }
+    }
+}
+
+impl fmt::Display for HexDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Self::InvalidHexCharacter { c, index } => {
+                write!(f, "Invalid character '{}' at position {}", c, index)
+            }
+            Self::InvalidStringLength => write!(f, "Invalid string length"),
+        }
+    }
+}
+
 named!(positive_integer<&str, usize>, map_res!(digit1, usize::from_str));
 
 #[cfg(test)]
@@ -291,64 +182,72 @@ mod tests {
     }
 
     #[test]
-    fn it_parses_symbols() {
-        use Symbol::*;
-        assert_eq!(massif_symbol("(heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n").map(|(_, o)| o),
-                   Ok(Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.")));
-        assert_eq!(massif_symbol("0x4E23FC67: std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)\n").map(|(_, o)| o),
-                   Ok(Sampled(Some(0x4E23FC67), "std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)")));
-        assert_eq!(massif_symbol("in 1 place, below massif's threshold (0.01%)").map(|(_, o)| o),
+    fn it_parses_calls() {
+        use Call::*;
+        assert_eq!(massif_call("(heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n").map(|(_, o)| o),
+                   Ok(Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.".to_string())));
+        assert_eq!(massif_call("0x4E23FC67: std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)\n").map(|(_, o)| o),
+                   Ok(Sampled(Some(0x4E23FC67), "std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)".to_string())));
+        assert_eq!(massif_call("in 1 place, below massif's threshold (0.01%)").map(|(_, o)| o),
                    Ok(Ignored(1, 0.01)));
-        assert_eq!(massif_symbol("in 5 places, below massif's threshold (0.01%)").map(|(_, o)| o),
+        assert_eq!(massif_call("in 5 places, below massif's threshold (0.01%)").map(|(_, o)| o),
                    Ok(Ignored(5, 0.01)));
-        assert_eq!(massif_symbol("in 9570 places, all below massif's threshold (0.01%)\n").map(|(_, o)| o),
+        assert_eq!(massif_call("in 9570 places, all below massif's threshold (0.01%)\n").map(|(_, o)| o),
                    Ok(Ignored(9570, 0.01)));
     }
 
     #[test]
     fn it_parses_samples() {
-        use Symbol::*;
+        use Call::*;
         assert_eq!(massif_sample("n184: 94985897 (heap allocation functions) malloc/new/new[], --alloc-fns, etc.\n").map(|(_, o)| o),
-                   Ok(Sample { nb_callers: 184, bytes: 94985897, symbol: Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.") }));
+                   Ok((Sample { bytes: 94985897, call: Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.".to_string()) }, 184)));
         assert_eq!(massif_sample("n4: 13847645 0x4E23FC67: std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)\n").map(|(_, o)| o),
-                   Ok(Sample { nb_callers: 4, bytes: 13847645, symbol: Sampled(Some(0x4E23FC67), "std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)") }));
+                   Ok((Sample { bytes: 13847645, call: Sampled(Some(0x4E23FC67), "std::string::_Rep::_S_create(unsigned long, unsigned long, std::allocator<char> const&) (in libstdc++.so)".to_string()) }, 4)));
         assert_eq!(massif_sample("n0: 109 in 1 place, below massif's threshold (0.01%)\n").map(|(_, o)| o),
-                   Ok(Sample { nb_callers: 0, bytes: 109, symbol: Ignored(1, 0.01) }));
+                   Ok((Sample { bytes: 109, call: Ignored(1, 0.01) }, 0)));
         assert_eq!(massif_sample("n0: 1355955 in 9570 places, all below massif's threshold (0.01%)\n").map(|(_, o)| o),
-                   Ok(Sample { nb_callers: 0, bytes: 1355955, symbol: Ignored(9570, 0.01) }));
+                   Ok((Sample { bytes: 1355955, call: Ignored(9570, 0.01) }, 0)));
     }
 
     #[test]
     fn it_parses_trees() {
-        // note: this smoke test may not be 100% accurate
         let tree = "\
-        n2: 11592561 0x15266383: char* std::string::_S_construct<char const*>(char const*, char const*, std::allocator<char> const&, std::forward_iterator_tag) (in liblog4cxx.so)\n\
-         n0: 11592452 0x4E241956: std::basic_string<char, std::char_traits<char>, std::allocator<char> >::basic_string(char const*, std::allocator<char> const&) (in libstdc++.so)\n\
+        n2: 11592561 0x15266383: leafmost_allocation() (in liballoc.so)\n\
+         n0: 11592452 0x4E241956: string_allocations() (in libstrings.so)\n\
          n0: 109 in 1 place, below massif's threshold (0.01%)\n\
-        n0: 42 in 5 places, below massif's threshold (0.01%)\n\
         ";
 
-        use Location::*;
-        let root1 = Allocation::new(11592561, Described("char* std::string::_S_construct<char const*>(char const*, char const*, std::allocator<char> const&, std::forward_iterator_tag) (in liblog4cxx.so)".to_string()));
-        let child1 = Allocation::new(11592452, Described("std::basic_string<char, std::char_traits<char>, std::allocator<char> >::basic_string(char const*, std::allocator<char> const&) (in libstdc++.so)".to_string()));
-        let child2 = Allocation::new(109, Omitted((1, 0.01)));
-        let root2 = Allocation::new(42, Omitted((5, 0.01)));
+        let expected = CallerTree {
+            sample: Sample {
+                bytes: 11592561,
+                call: Call::Sampled(Some(0x15266383), "leafmost_allocation() (in liballoc.so)".to_string()),
+            },
+            callers: vec![
+                CallerTree {
+                    sample: Sample {
+                        bytes: 11592452,
+                        call: Call::Sampled(Some(0x4E241956), "string_allocations() (in libstrings.so)".to_string()),
+                    },
+                    callers: vec![],
+                },
+                CallerTree {
+                    sample: Sample {
+                        bytes: 109,
+                        call: Call::Ignored(1, 0.01),
+                    },
+                    callers: vec![],
+                }
+            ],
+        };
 
-        use Call::*;
-        let reader = BufReader::new(tree.as_bytes());
-        let mut calls = read_massif_tree(reader).map(|result| result.map_err(|e| format!("{:?}", e)));
-        assert_eq!(calls.next(), Some(Ok((Inner(format!("{}", 0x15266383)), None, root1))));
-        assert_eq!(calls.next(), Some(Ok((Inner(format!("{}", 0x4E241956)), Some(Inner(format!("{}", 0x15266383))), child1))));
-        assert_eq!(calls.next(), Some(Ok((Root, Some(Inner(format!("{}", 0x15266383))), child2))));
-        assert_eq!(calls.next(), Some(Ok((Root, None, root2))));
-        assert_eq!(calls.next(), None);
+        assert_eq!(massif_tree(tree).map(|(_, o)| o), Ok(expected));
     }
 
     #[test]
     fn it_parses_snapshot_attributes() {
-        assert_eq!(massif_snapshot_attribute("time=0\n").map(|(_, o)| o), Ok(("time", "0")));
-        assert_eq!(massif_snapshot_attribute("mem_heap_extra_B=0\n").map(|(_, o)| o), Ok(("mem_heap_extra_B", "0")));
-        assert_eq!(massif_snapshot_attribute("mem_stacks_B=0\n").map(|(_, o)| o), Ok(("mem_stacks_B", "0")));
+        assert_eq!(massif_snapshot_attribute("time=0\n").map(|(_, o)| o), Ok(("time".to_string(), "0".to_string())));
+        assert_eq!(massif_snapshot_attribute("mem_heap_extra_B=0\n").map(|(_, o)| o), Ok(("mem_heap_extra_B".to_string(), "0".to_string())));
+        assert_eq!(massif_snapshot_attribute("mem_stacks_B=0\n").map(|(_, o)| o), Ok(("mem_stacks_B".to_string(), "0".to_string())));
     }
 
     #[test]
@@ -362,11 +261,11 @@ mod tests {
 
         let expected = {
             let mut attributes = Attributes::new();
-            attributes.insert("time", "0");
-            attributes.insert("mem_heap_B", "0");
-            attributes.insert("mem_heap_extra_B", "0");
-            attributes.insert("mem_stacks_B", "0");
-            attributes.insert("heap_tree", "detailed");
+            attributes.insert("time".to_string(), "0".to_string());
+            attributes.insert("mem_heap_B".to_string(), "0".to_string());
+            attributes.insert("mem_heap_extra_B".to_string(), "0".to_string());
+            attributes.insert("mem_stacks_B".to_string(), "0".to_string());
+            attributes.insert("heap_tree".to_string(), "detailed".to_string());
             attributes
         };
 
@@ -388,24 +287,23 @@ mod tests {
         ";
 
         let mut attributes = Attributes::new();
-        attributes.insert("time", "0");
-        attributes.insert("mem_heap_B", "0");
-        attributes.insert("mem_heap_extra_B", "0");
-        attributes.insert("mem_stacks_B", "0");
-        attributes.insert("heap_tree", "detailed");
+        attributes.insert("time".to_string(), "0".to_string());
+        attributes.insert("mem_heap_B".to_string(), "0".to_string());
+        attributes.insert("mem_heap_extra_B".to_string(), "0".to_string());
+        attributes.insert("mem_stacks_B".to_string(), "0".to_string());
+        attributes.insert("heap_tree".to_string(), "detailed".to_string());
         let attributes = attributes;
 
-        let tree = Tree {
+        let tree = CallerTree {
             sample: Sample {
-                nb_callers: 0,
                 bytes: 0,
-                symbol: Symbol::Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.")
+                call: Call::Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.".to_string())
             },
             callers: vec![],
         };
 
         assert_eq!(massif_snapshot(snapshot).map(|(_, o)| o),
-                   Ok((0, attributes, tree)));
+                   Ok(Snapshot { id: 0, attributes, tree }));
     }
 
     #[test]
@@ -417,17 +315,17 @@ mod tests {
                      ";
 
         let mut attributes = Attributes::new();
-        attributes.insert("desc", "-x --option=42 arg1 arg2");
-        attributes.insert("cmd", "the command-line");
-        attributes.insert("time_unit", "ms");
+        attributes.insert("desc".to_string(), "-x --option=42 arg1 arg2".to_string());
+        attributes.insert("cmd".to_string(), "the command-line".to_string());
+        attributes.insert("time_unit".to_string(), "ms".to_string());
         let attributes = attributes;
 
         assert_eq!(massif_header(header).map(|(_, o)| o), Ok(attributes));
     }
 
     #[test]
-    fn it_parses_dumps() {
-        let dump = "\
+    fn it_parses_the_full_output() {
+        let out = "\
                      desc: -x --option=42 arg1 arg2\n\
                      cmd: the command-line\n\
                      time_unit: ms\n\
@@ -448,53 +346,56 @@ mod tests {
 
         let header_attributes = {
             let mut attributes = Attributes::new();
-            attributes.insert("desc", "-x --option=42 arg1 arg2");
-            attributes.insert("cmd", "the command-line");
-            attributes.insert("time_unit", "ms");
+            attributes.insert("desc".to_string(), "-x --option=42 arg1 arg2".to_string());
+            attributes.insert("cmd".to_string(), "the command-line".to_string());
+            attributes.insert("time_unit".to_string(), "ms".to_string());
             attributes
         };
-
-        assert_eq!(massif_header(dump).map(|(_, o)| o), Ok(header_attributes.clone()));
 
         let snapshot_attributes = {
             let mut attributes = Attributes::new();
-            attributes.insert("heap_tree", "detailed");
-            attributes.insert("time", "0");
+            attributes.insert("heap_tree".to_string(), "detailed".to_string());
+            attributes.insert("time".to_string(), "0".to_string());
             attributes
         };
 
-        let snapshot0_tree = Tree {
+        let snapshot0_tree = CallerTree {
             sample: Sample {
-                nb_callers: 0,
                 bytes: 0,
-                symbol: Symbol::Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.")
+                call: Call::Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.".to_string())
             },
             callers: vec![],
         };
 
-        let snapshot0 = (0, snapshot_attributes.clone(), snapshot0_tree);
+        let snapshot0 = Snapshot {
+            id: 0,
+            attributes: snapshot_attributes.clone(),
+            tree: snapshot0_tree
+        };
 
-        let snapshot1_tree = Tree {
+        let snapshot1_tree = CallerTree {
             sample: Sample {
-                nb_callers: 1,
                 bytes: 21,
-                symbol: Symbol::Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc."),
+                call: Call::Sampled(None, "(heap allocation functions) malloc/new/new[], --alloc-fns, etc.".to_string()),
             },
             callers: vec![
-                Tree {
+                CallerTree {
                     sample: Sample {
-                        nb_callers: 0,
                         bytes: 21,
-                        symbol: Symbol::Sampled(Some(0x4E23FC67), "allocate_some_memory() (in liberty.so)"),
+                        call: Call::Sampled(Some(0x4E23FC67), "allocate_some_memory() (in liberty.so)".to_string()),
                     },
                     callers: vec![],
                 }
             ],
         };
 
-        let snapshot1 = (1, snapshot_attributes, snapshot1_tree);
+        let snapshot1 = Snapshot {
+            id: 1,
+            attributes: snapshot_attributes,
+            tree: snapshot1_tree
+        };
 
-        assert_eq!(massif_dump(dump).map(|(_, o)| o), Ok((header_attributes, vec![snapshot0, snapshot1])));
+        assert_eq!(massif(out).map(|(_, o)| o), Ok((header_attributes, vec![snapshot0, snapshot1])));
     }
 
     #[test]
