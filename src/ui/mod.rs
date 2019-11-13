@@ -6,7 +6,10 @@ use std::path::Path;
 use tui::{
     Terminal,
     backend::{TermionBackend},
-    // widgets::Widget,
+    widgets::Widget,
+    style::{Style, Color},
+    layout::{Layout, Constraint, Direction, Rect},
+    buffer::Buffer,
 };
 
 use termion::{
@@ -37,10 +40,58 @@ use self::{
     // views::{CallerTreeWidget, CallGraphWidget},
 };
 
-pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Result<()> {
-    let ref caller_tree = snapshots[0].tree;
-    let call_graph = build_call_graph(caller_tree);
+struct AllocationGraphWidget<'a> {
+    snapshots: &'a [Snapshot],
+}
 
+impl<'a> AllocationGraphWidget<'a> {
+    fn new(snapshots: &'a [Snapshot]) -> Self {
+        AllocationGraphWidget { snapshots }
+    }
+}
+
+fn pad_area(mut area: Rect, percentage: u16) -> Rect {
+    debug_assert!(percentage <= 100);
+
+    let constraints = [
+        Constraint::Percentage(percentage),
+        Constraint::Percentage(100 - 2 * percentage),
+        Constraint::Percentage(percentage)
+    ];
+
+    for direction in [Direction::Horizontal, Direction::Vertical].into_iter().cloned() {
+        area = Layout::default()
+            .direction(direction)
+            .constraints(constraints.as_ref())
+            .split(area)[1];
+    }
+
+    area
+}
+
+impl<'a> Widget for AllocationGraphWidget<'a> {
+    fn draw(&mut self, area: Rect, buf: &mut Buffer) {
+        let area = pad_area(area, 10);
+
+        let max_bytes = self.snapshots.iter()
+            .map(|snapshot| snapshot.tree.sample.bytes)
+            .max().unwrap_or(0);
+
+        for (i, snapshot) in self.snapshots.iter().enumerate() {
+            let bar_width = (i * area.width as usize / self.snapshots.len()) as u16;
+            let bar_height = (snapshot.tree.sample.bytes * area.height as usize / max_bytes) as u16;
+
+            // TODO use a rect
+            for x in 0..bar_width {
+                for y in 0..bar_height {
+                    buf.set_string(x + area.left(), y + area.top(), " ", Style::default().bg(Color::Red));
+                }
+            }
+        }
+    }
+}
+
+pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Result<()> {
     let output: Box<dyn Write> = if let Some(path) = output {
         let file = File::create(path.as_ref())?;
         Box::new(file)
@@ -60,20 +111,18 @@ pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Res
 
     let events = Events::new();
 
+    // let ref caller_tree = snapshots[0].tree;
+    // let call_graph = build_call_graph(caller_tree);
+
     // let mut caller_tree = CallerTreeController::new(&caller_tree);
     // let mut call_graph = CallGraphController::new(&call_graph);
-
-    let mut tab_index = 0;
-    let nb_tabs = 2;
 
     loop {
         terminal.draw(|mut f| {
             let size = f.size();
-            if tab_index == 0 {
-                // CallerTreeWidget::new(&caller_tree).render(&mut f, size);
-            } else {
-                // CallGraphWidget::new(&call_graph).render(&mut f, size);
-            }
+            AllocationGraphWidget::new(&snapshots).render(&mut f, size);
+            // CallerTreeWidget::new(&caller_tree).render(&mut f, size);
+            // CallGraphWidget::new(&call_graph).render(&mut f, size);
         })?;
 
         // since output is buffered, flush to see the effect immediately when hitting backspace
@@ -91,13 +140,9 @@ pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Res
                     let size = terminal.size().unwrap();
                     match input {
                         Key::Char('q') => { break; }
-                        Key::Char('\t') => { tab_index = (tab_index + 1) % nb_tabs }
                         input @ _       => {
-                            if tab_index == 0 {
-                                // caller_tree.handle_input(size, &input);
-                            } else {
-                                // call_graph.handle_input(size, &input);
-                            }
+                            // caller_tree.handle_input(size, &input);
+                            // call_graph.handle_input(size, &input);
                         }
                     }
                 },
