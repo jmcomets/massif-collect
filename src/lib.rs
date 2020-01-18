@@ -3,10 +3,11 @@ use std::collections::HashMap;
 #[macro_use]
 extern crate nom;
 
-pub mod ui;
-
 pub mod graph;
+
 pub mod parsing;
+
+pub mod ui;
 
 pub type SnapshotId = usize;
 
@@ -19,9 +20,27 @@ pub struct Snapshot {
     tree: CallerTree,
 }
 
-pub type Address = usize;
+#[derive(Debug, PartialEq)]
+pub struct CallerTree {
+    pub sample: Sample,
+    pub callers: Vec<CallerTree>,
+}
+
+impl CallerTree {
+    pub fn walk(&self) -> CallerTreeWalker {
+        CallerTreeWalker { stack: vec![(&self.sample, &self.callers[..])] }
+    }
+}
 
 #[derive(Debug, PartialEq)]
+pub struct Sample {
+    pub bytes: usize,
+    pub call: Call,
+}
+
+pub type Address = usize;
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Call {
     Sampled(Option<Address>, String),
     Ignored(usize, f32),
@@ -36,24 +55,6 @@ impl ToString for Call {
                 format!("in {} place{}, below massif's threshold ({:.2}%)", count, plural, threshold)
             }
         }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Sample {
-    pub bytes: usize,
-    pub call: Call,
-}
-
-#[derive(Debug, PartialEq)]
-pub struct CallerTree {
-    pub sample: Sample,
-    pub callers: Vec<CallerTree>,
-}
-
-impl CallerTree {
-    pub fn walk(&self) -> CallerTreeWalker {
-        CallerTreeWalker { stack: vec![(&self.sample, &self.callers[..])] }
     }
 }
 

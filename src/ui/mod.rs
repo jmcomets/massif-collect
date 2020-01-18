@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use std::panic;
 use std::path::Path;
 
+#[allow(unused_imports)]
 use tui::{
     Terminal,
     backend::{TermionBackend},
@@ -21,75 +22,42 @@ use termion::{
 
 use crate::{
     Snapshot,
-    graph::build_call_graph,
+    graph::CallGraph,
 };
 
 mod events;
 
-// mod input;
-// mod controllers;
-// mod views;
+mod allocation_graph;
+// mod caller_tree;
+mod call_graph;
 
+#[allow(unused_imports)]
 use self::{
-    // controllers::{
-    //     CallGraphController,
-    //     CallerTreeController,
-    // },
     events::{Events, Event},
-    // input::InputHandler,
-    // views::{CallerTreeWidget, CallGraphWidget},
+    call_graph::CallGraphWidget,
+    allocation_graph::AllocationGraphWidget,
 };
 
-struct AllocationGraphWidget<'a> {
-    snapshots: &'a [Snapshot],
+pub trait InputHandler {
+    fn handle_input(&mut self, area: Rect, input: &Key);
 }
 
-impl<'a> AllocationGraphWidget<'a> {
-    fn new(snapshots: &'a [Snapshot]) -> Self {
-        AllocationGraphWidget { snapshots }
-    }
-}
+// impl<'a> InputHandler for CallerTreeController<'a> {
+//     fn handle_input(&mut self, area: Rect, input: &Key) {
+//         let page_height = area.height as usize;
+//         match input {
+//             Key::Down | Key::Char('j') => { self.select_next(page_height); }
+//             Key::Up | Key::Char('k')   => { self.select_previous(); }
+//             Key::Home                  => { self.reset(); }
+//             Key::Char('\n')            => { self.toggle_selected(); }
 
-fn pad_area(mut area: Rect, percentage: u16) -> Rect {
-    debug_assert!(percentage <= 100);
+//             Key::PageDown | Key::Char('f') => { self.select_nth_next(page_height, page_height); }
+//             Key::PageUp | Key::Char('b') => { self.select_nth_previous(page_height); }
 
-    let constraints = [
-        Constraint::Percentage(percentage),
-        Constraint::Percentage(100 - 2 * percentage),
-        Constraint::Percentage(percentage)
-    ];
-
-    for direction in [Direction::Horizontal, Direction::Vertical].into_iter().cloned() {
-        area = Layout::default()
-            .direction(direction)
-            .constraints(constraints.as_ref())
-            .split(area)[1];
-    }
-
-    area
-}
-
-impl<'a> Widget for AllocationGraphWidget<'a> {
-    fn draw(&mut self, area: Rect, buf: &mut Buffer) {
-        let area = pad_area(area, 10);
-
-        let max_bytes = self.snapshots.iter()
-            .map(|snapshot| snapshot.tree.sample.bytes)
-            .max().unwrap_or(0);
-
-        for (i, snapshot) in self.snapshots.iter().enumerate() {
-            let bar_width = (i * area.width as usize / self.snapshots.len()) as u16;
-            let bar_height = (snapshot.tree.sample.bytes * area.height as usize / max_bytes) as u16;
-
-            // TODO use a rect
-            for x in 0..bar_width {
-                for y in 0..bar_height {
-                    buf.set_string(x + area.left(), y + area.top(), " ", Style::default().bg(Color::Red));
-                }
-            }
-        }
-    }
-}
+//             _ => {}
+//         }
+//     }
+// }
 
 pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Result<()> {
     let output: Box<dyn Write> = if let Some(path) = output {
@@ -111,18 +79,19 @@ pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Res
 
     let events = Events::new();
 
-    // let ref caller_tree = snapshots[0].tree;
-    // let call_graph = build_call_graph(caller_tree);
+    let ref caller_tree = snapshots[0].tree;
+    let call_graph = CallGraph::from_tree(caller_tree);
 
-    // let mut caller_tree = CallerTreeController::new(&caller_tree);
-    // let mut call_graph = CallGraphController::new(&call_graph);
+    // let mut allocation_graph = AllocationGraphWidget::new(&snapshots);
+    let mut call_graph = CallGraphWidget::new(&call_graph);
+    // let mut caller_tree = CallerTreeWidget::new(&caller_tree);
 
     loop {
         terminal.draw(|mut f| {
             let size = f.size();
-            AllocationGraphWidget::new(&snapshots).render(&mut f, size);
-            // CallerTreeWidget::new(&caller_tree).render(&mut f, size);
-            // CallGraphWidget::new(&call_graph).render(&mut f, size);
+            // allocation_graph.render(&mut f, size);
+            call_graph.render(&mut f, size);
+            // caller_tree.render(&mut f, size);
         })?;
 
         // since output is buffered, flush to see the effect immediately when hitting backspace
@@ -140,9 +109,9 @@ pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Res
                     let size = terminal.size().unwrap();
                     match input {
                         Key::Char('q') => { break; }
-                        input @ _       => {
+                        input @ _      => {
                             // caller_tree.handle_input(size, &input);
-                            // call_graph.handle_input(size, &input);
+                            call_graph.handle_input(size, &input);
                         }
                     }
                 },
