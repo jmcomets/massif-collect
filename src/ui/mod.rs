@@ -3,14 +3,11 @@ use std::io::{self, Write};
 use std::panic;
 use std::path::Path;
 
-#[allow(unused_imports)]
 use tui::{
     Terminal,
-    backend::{TermionBackend},
+    backend::TermionBackend,
     widgets::Widget,
-    style::{Style, Color},
-    layout::{Layout, Constraint, Direction, Rect},
-    buffer::Buffer,
+    layout::Rect,
 };
 
 use termion::{
@@ -20,6 +17,7 @@ use termion::{
     screen::{AlternateScreen, ToMainScreen},
 };
 
+#[allow(unused_imports)]
 use crate::{
     Snapshot,
     graph::CallGraph,
@@ -42,23 +40,7 @@ pub trait InputHandler {
     fn handle_input(&mut self, area: Rect, input: &Key);
 }
 
-// impl<'a> InputHandler for CallerTreeController<'a> {
-//     fn handle_input(&mut self, area: Rect, input: &Key) {
-//         let page_height = area.height as usize;
-//         match input {
-//             Key::Down | Key::Char('j') => { self.select_next(page_height); }
-//             Key::Up | Key::Char('k')   => { self.select_previous(); }
-//             Key::Home                  => { self.reset(); }
-//             Key::Char('\n')            => { self.toggle_selected(); }
-
-//             Key::PageDown | Key::Char('f') => { self.select_nth_next(page_height, page_height); }
-//             Key::PageUp | Key::Char('b') => { self.select_nth_previous(page_height); }
-
-//             _ => {}
-//         }
-//     }
-// }
-
+#[allow(unused_variables, unused_mut)]
 pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Result<()> {
     let output: Box<dyn Write> = if let Some(path) = output {
         let file = File::create(path.as_ref())?;
@@ -82,15 +64,15 @@ pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Res
     let ref caller_tree = snapshots[0].tree;
     let call_graph = CallGraph::from_tree(caller_tree);
 
-    // let mut allocation_graph = AllocationGraphWidget::new(&snapshots);
+    let mut allocation_graph = AllocationGraphWidget::new(&snapshots);
     let mut call_graph = CallGraphWidget::new(&call_graph);
     // let mut caller_tree = CallerTreeWidget::new(&caller_tree);
 
     loop {
         terminal.draw(|mut f| {
             let size = f.size();
-            // allocation_graph.render(&mut f, size);
-            call_graph.render(&mut f, size);
+            allocation_graph.render(&mut f, size);
+            // call_graph.render(&mut f, size);
             // caller_tree.render(&mut f, size);
         })?;
 
@@ -111,7 +93,7 @@ pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Res
                         Key::Char('q') => { break; }
                         input @ _      => {
                             // caller_tree.handle_input(size, &input);
-                            call_graph.handle_input(size, &input);
+                            // call_graph.handle_input(size, &input);
                         }
                     }
                 },

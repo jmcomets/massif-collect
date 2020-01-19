@@ -9,7 +9,16 @@ use tui::{
     style::{Color, Modifier, Style},
     widgets::Widget,
 };
-use crate::{graph::CallId, tree::CallerTree};
+
+use crate::{
+    graph::CallId,
+    CallerTree,
+};
+
+use super::{
+    events::Key,
+    InputHandler,
+};
 
 pub struct CallerTreeWidget<'a>(&'a CallerTreeController<'a>);
 
@@ -58,6 +67,23 @@ impl<'a> Widget for CallerTreeWidget<'a> {
 
                 buf.set_string(x, y, line, style);
             }
+        }
+    }
+}
+
+impl<'a> InputHandler for CallerTreeController<'a> {
+    fn handle_input(&mut self, area: Rect, input: &Key) {
+        let page_height = area.height as usize;
+        match input {
+            Key::Down | Key::Char('j') => { self.select_next(page_height); }
+            Key::Up | Key::Char('k')   => { self.select_previous(); }
+            Key::Home                  => { self.reset(); }
+            Key::Char('\n')            => { self.toggle_selected(); }
+
+            Key::PageDown | Key::Char('f') => { self.select_nth_next(page_height, page_height); }
+            Key::PageUp | Key::Char('b') => { self.select_nth_previous(page_height); }
+
+            _ => {}
         }
     }
 }

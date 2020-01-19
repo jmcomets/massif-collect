@@ -24,9 +24,11 @@ use crate::{
     },
 };
 
+#[allow(dead_code)]
 pub struct CallGraphWidget<'a>(CallGraphController<'a>);
 
 impl<'a> CallGraphWidget<'a> {
+    #[allow(dead_code)]
     pub fn new(call_graph: &'a CallGraph) -> Self {
         CallGraphWidget(CallGraphController::new(call_graph))
     }
