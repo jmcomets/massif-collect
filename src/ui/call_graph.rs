@@ -105,8 +105,6 @@ impl<'a> InputHandler for CallGraphWidget<'a> {
     }
 }
 
-// old call graph controller
-
 struct CallGraphController<'a> {
     call_graph: &'a CallGraph,
     callers: CallListController,
@@ -196,7 +194,7 @@ impl<'a> CallGraphController<'a> {
 
     pub fn enter_selected(&mut self) {
         if let Some(stack) = self.current().selected_item() {
-            let call_id = if self.callees_selected { stack.callee_id } else { stack.caller_id };
+            let call_id = stack.call_id;
             self.history.push(call_id);
             self.navigate_to(call_id);
         }
@@ -212,52 +210,66 @@ impl<'a> CallGraphController<'a> {
     }
 
     fn navigate_to(&mut self, call_id: CallId) {
-        let callers = self.call_graph.neighbors_directed(call_id, Incoming)
-            .map(|other_call_id| {
-                let (caller_id, callee_id) = (other_call_id, call_id);
-                let calls = self.call_graph.edge_weight(caller_id, callee_id).unwrap();
-                (caller_id, callee_id, calls.as_slice())
-            });
-        self.callers = CallListController::new(callers);
-
-        let callees = self.call_graph.neighbors_directed(call_id, Outgoing)
-            .map(|other_call_id| {
-                let (caller_id, callee_id) = (call_id, other_call_id);
-                let calls = self.call_graph.edge_weight(caller_id, callee_id).unwrap();
-                (caller_id, callee_id, calls.as_slice())
-            });
-        self.callees = CallListController::new(callees);
+        self.callers = CallListController::from_callers(self.call_graph, call_id);
+        self.callees = CallListController::from_callees(self.call_graph, call_id);
     }
 
     fn navigate_to_root(&mut self) {
         self.callers = CallListController::empty();
-
-        let callees = self.call_graph.nodes()
-            .filter(|&node| self.call_graph.neighbors_directed(node, Incoming).next().is_none())
-            .flat_map(|node| self.call_graph.edges(node))
-            .map(|(caller_id, callee_id, calls)| (caller_id, callee_id, calls.as_slice()));
-        self.callees = CallListController::new(callees);
+        self.callees = CallListController::roots(self.call_graph);
     }
 }
 
-// old call list controller
-
-struct CallListController(SelectionListController<CallStack>);
+struct CallListController {
+    selection_list: SelectionListController<CallStack>,
+}
 
 impl CallListController {
-    pub fn new<'a, T>(iter: T) -> Self
-        where T: IntoIterator<Item=(CallId, CallId, &'a [usize])>,
+    pub fn new<'a, T>(call_graph: &'a CallGraph, iter: T) -> Self
+        where T: IntoIterator<Item=(CallId, &'a [usize])>,
     {
         let mut stacks: Vec<_> = iter.into_iter()
-            .map(|(caller_id, callee_id, calls)| CallStack::new(caller_id, callee_id, calls.as_ref()))
+            .map(|(call_id, calls)| {
+                CallStack::new(call_graph, call_id, calls.as_ref())
+            })
             .collect();
         stacks.sort_by_key(|stack| stack.allocated_bytes);
         stacks.reverse();
-        CallListController(SelectionListController::new(stacks))
+
+        let selection_list = SelectionListController::new(stacks);
+
+        CallListController { selection_list }
+    }
+
+    pub fn from_callers(call_graph: &CallGraph, callee_id: CallId) -> Self {
+        let callers = call_graph.neighbors_directed(callee_id, Incoming)
+            .map(|caller_id| {
+                let calls = call_graph.edge_weight(caller_id, callee_id).unwrap();
+                (caller_id, calls.as_slice())
+            });
+        CallListController::new(call_graph, callers)
+    }
+
+    pub fn from_callees(call_graph: &CallGraph, caller_id: CallId) -> Self {
+        let callees = call_graph.neighbors_directed(caller_id, Outgoing)
+            .map(|callee_id| {
+                let calls = call_graph.edge_weight(caller_id, callee_id).unwrap();
+                (callee_id, calls.as_slice())
+            });
+        CallListController::new(call_graph, callees)
+    }
+
+    pub fn roots(call_graph: &CallGraph) -> Self {
+        let callees = call_graph.nodes()
+            .filter(|&node| call_graph.neighbors_directed(node, Incoming).next().is_none())
+            .flat_map(|node| call_graph.edges(node))
+            .map(|(_, callee_id, calls)| (callee_id, calls.as_slice()));
+        CallListController::new(call_graph, callees)
     }
 
     pub fn empty() -> Self {
-        CallListController(SelectionListController::new(vec![]))
+        let selection_list = SelectionListController::new(vec![]);
+        CallListController { selection_list }
     }
 }
 
@@ -265,30 +277,29 @@ impl Deref for CallListController {
     type Target = SelectionListController<CallStack>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.selection_list
     }
 }
 
 impl DerefMut for CallListController {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.selection_list
     }
 }
 
-pub struct CallStack {
-    pub caller_id: CallId,
-    pub callee_id: CallId,
+struct CallStack {
+    pub call_id: CallId,
     pub description: String,
     pub allocated_bytes: usize,
 }
 
 impl CallStack {
-    fn new(caller_id: CallId, callee_id: CallId, allocations: &[usize]) -> Self {
-        // let location = merge_locations(allocations.iter().map(|alloc| &alloc.location)).unwrap();
+    fn new(call_graph: &CallGraph, call_id: CallId, allocations: &[usize]) -> Self {
+        let call = call_graph.get_call(call_id).unwrap();
         let bytes = allocations.iter().sum();
         CallStack {
-            caller_id, callee_id,
-            description: format!("{} bytes", bytes),
+            call_id,
+            description: format!("{} bytes {}", bytes, call.to_string()),
             allocated_bytes: bytes,
         }
     }
@@ -300,7 +311,7 @@ impl AsRef<str> for CallStack {
     }
 }
 
-// old selection list controller
+// selection list controller (could be factored out)
 
 struct SelectionListController<T: AsRef<str>> {
     items: Vec<T>,
