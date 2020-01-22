@@ -25,7 +25,7 @@ use crate::{
 
 mod events;
 
-mod snapshot_chart;
+mod allocation_chart;
 // mod caller_tree;
 mod call_graph;
 
@@ -33,7 +33,7 @@ mod call_graph;
 use self::{
     events::{Events, Event},
     call_graph::CallGraphWidget,
-    snapshot_chart::SnapshotChartWidget,
+    allocation_chart::AllocationChartWidget,
 };
 
 pub trait InputHandler {
@@ -64,14 +64,14 @@ pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Res
     let ref caller_tree = snapshots[0].tree;
     let call_graph = CallGraph::from_tree(caller_tree);
 
-    let mut allocation_graph = SnapshotChartWidget::new(&snapshots);
+    let mut allocation_chart = AllocationChartWidget::new(&snapshots);
     let mut call_graph = CallGraphWidget::new(&call_graph);
     // let mut caller_tree = CallerTreeWidget::new(&caller_tree);
 
     loop {
         terminal.draw(|mut f| {
             let size = f.size();
-            allocation_graph.render(&mut f, size);
+            allocation_chart.render(&mut f, size);
             // call_graph.render(&mut f, size);
             // caller_tree.render(&mut f, size);
         })?;
@@ -92,6 +92,7 @@ pub fn run<P: AsRef<Path>>(output: Option<P>, snapshots: &[Snapshot]) -> io::Res
                     match input {
                         Key::Char('q') => { break; }
                         input @ _      => {
+                            allocation_chart.handle_input(size, &input);
                             // caller_tree.handle_input(size, &input);
                             // call_graph.handle_input(size, &input);
                         }

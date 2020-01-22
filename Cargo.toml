@@ -9,6 +9,7 @@ edition = "2018"
 [dependencies]
 nom = "5.0.1"
 petgraph = { git = "https://github.com/jmcomets/petgraph.git", branch = "graphmap-edge-entry" }
-tui = "0.6.2"
+tui = { git = "https://github.com/jmcomets/tui-rs.git", branch = "selectable-bar-chart" }
 termion = "1.5.3"
 clap = "2.33.0"
+unicode-width = "0.1.6"
